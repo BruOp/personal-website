@@ -1,11 +1,11 @@
 module.exports = {
   siteMetadata: {
-    title: `Gatsby Starter Blog`,
-    author: `Kyle Mathews`,
-    description: `A starter blog demonstrating what Gatsby can do.`,
-    siteUrl: `https://gatsby-starter-blog-demo.netlify.com/`,
+    title: `Bruno Opsenica's Blog`,
+    author: `Bruno Opsenica`,
+    description: `A blog about learning 3D programming`,
+    siteUrl: `https://bruop.github.com/`,
     social: {
-      twitter: `kylemathews`,
+      twitter: `bruops`,
     },
   },
   plugins: [
@@ -47,12 +47,6 @@ module.exports = {
     },
     `gatsby-transformer-sharp`,
     `gatsby-plugin-sharp`,
-    {
-      resolve: `gatsby-plugin-google-analytics`,
-      options: {
-        //trackingId: `ADD YOUR TRACKING ID HERE`,
-      },
-    },
     `gatsby-plugin-feed`,
     {
       resolve: `gatsby-plugin-manifest`,
@@ -75,4 +69,4 @@ module.exports = {
       },
     },
   ],
-}
+};
