@@ -1,27 +1,48 @@
 import React from "react";
+import SideBar from "./sidebar";
+import LayoutGrid from "./layout_grid";
+import styled, { createGlobalStyle } from "styled-components";
 
+import Footer from "./footer";
+import { COLORS, media } from "../utils/style_helpers";
 import { rhythm } from "../utils/typography";
+
+const GlobalStyles = createGlobalStyle`
+  color: ${COLORS.primary};
+
+  a {
+    color: ${COLORS.secondary}
+
+  }
+
+  a:visited {
+    color: ${COLORS.secondary}
+  }
+`;
+
+const MainContent = styled.main`
+  border-top: 1px solid ${COLORS.lightest};
+  padding-top: ${rhythm(1)};
+
+  ${media.medium`
+    padding: 0 0 0 ${rhythm(1)};
+    border-left: 1px solid ${COLORS.lightest};
+    border-top: 0
+  `};
+`;
 
 class Layout extends React.Component {
   render() {
     const { children } = this.props;
-
     return (
-      <div
-        style={{
-          marginLeft: `auto`,
-          marginRight: `auto`,
-          maxWidth: rhythm(24),
-          padding: `${rhythm(1.5)} ${rhythm(3 / 4)}`,
-        }}
-      >
-        <main>{children}</main>
-        <footer>
-          © {new Date().getFullYear()}, Built with
-          {` `}
-          <a href="https://www.gatsbyjs.org">Gatsby</a>
-        </footer>
-      </div>
+      <>
+        <GlobalStyles />
+        <LayoutGrid>
+          <SideBar />
+          <MainContent>{children}</MainContent>
+          <Footer />
+        </LayoutGrid>
+      </>
     );
   }
 }
