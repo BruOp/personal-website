@@ -3,6 +3,7 @@ import { css } from "styled-components";
 export const COLORS = {
   primary: "#444444",
   secondary: "#1ca086",
+  tertiary: "#EF9803",
   lighter: "#666666",
   lightest: "#dddddd",
 };

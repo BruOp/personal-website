@@ -10,8 +10,8 @@ const links = [
     text: "Blog Posts",
   },
   {
-    to: "/about_me",
-    text: "About Me",
+    to: "/about",
+    text: "About",
   },
 ];
 
@@ -49,6 +49,10 @@ NavList = styled(NavList)`
       display: block;
       margin: initial;
     `}
+
+    &:last-child {
+      margin: 0;
+    }
   }
 `;
 

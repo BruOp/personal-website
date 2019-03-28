@@ -35,8 +35,8 @@ const SocialLink = styled.li`
   transition: fill 500ms, border 500ms;
 
   &:hover {
-    border: 1px solid ${COLORS.secondary};
-    fill: ${COLORS.secondary};
+    border: 1px solid ${COLORS.tertiary};
+    fill: ${COLORS.tertiary};
   }
 `;
 
