@@ -3,6 +3,7 @@ import { Link, graphql } from "gatsby";
 import Layout from "../components/layout";
 import SEO from "../components/seo";
 import { rhythm } from "../utils/typography";
+import BlogPostDate from "../components/blog_post_date";
 
 class BlogPostTemplate extends React.Component {
   render() {
@@ -14,7 +15,7 @@ class BlogPostTemplate extends React.Component {
       <Layout location={this.props.location} title={siteTitle}>
         <SEO title={post.frontmatter.title} description={post.frontmatter.description || post.excerpt} />
         <h1>{post.frontmatter.title}</h1>
-        <p>{post.frontmatter.date}</p>
+        <BlogPostDate>{post.frontmatter.date}</BlogPostDate>
         <div dangerouslySetInnerHTML={{ __html: post.html }} />
         <hr
           style={{
