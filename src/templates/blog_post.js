@@ -5,6 +5,8 @@ import SEO from "../components/seo";
 import { rhythm } from "../utils/typography";
 import BlogPostDate from "../components/blog_post_date";
 
+import "katex/dist/katex.min.css";
+
 class BlogPostTemplate extends React.Component {
   render() {
     const post = this.props.data.markdownRemark;

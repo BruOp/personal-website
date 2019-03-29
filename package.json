@@ -20,12 +20,14 @@
     "gatsby-plugin-typography": "^2.2.10",
     "gatsby-remark-copy-linked-files": "^2.0.11",
     "gatsby-remark-images": "^2.0.6",
+    "gatsby-remark-katex": "^3.0.4",
     "gatsby-remark-prismjs": "^3.2.6",
     "gatsby-remark-responsive-iframe": "^2.1.1",
     "gatsby-remark-smartypants": "^2.0.9",
     "gatsby-source-filesystem": "^2.0.28",
     "gatsby-transformer-remark": "^2.3.8",
     "gatsby-transformer-sharp": "^2.1.17",
+    "katex": "^0.10.1",
     "prismjs": "^1.16.0",
     "react": "^16.8.5",
     "react-dom": "^16.8.5",
@@ -33,8 +35,6 @@
     "react-typography": "^0.16.19",
     "styled-components": "^4.2.0",
     "typography": "^0.16.19",
-    "typography-theme-fairy-gates": "^0.16.19",
-    "typography-theme-noriega": "^0.16.19",
     "typography-theme-us-web-design-standards": "^0.16.19"
   },
   "devDependencies": {
