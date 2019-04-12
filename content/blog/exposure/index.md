@@ -249,9 +249,7 @@ At the end of the loop, we now have our weighted sum, which we can easily use to
 
 Finally, we move from the histogram bin space back to actual luminance values by performing the inverse of the operation we performed when constructing the histogram. This gives us the actual average luminance value for this frame.
 
-However, to prevent sudden changes in the exposure which would cause the final image to "flicker" for the user, we are going to use the [last frame's exposure value]() to smoothly change the value we store in the image. That's it! We now have our average luminance value, which we can use with the equation above to calculate the exposure to prepare our image for tone mapping!
-
-### Tone mapping
+However, to prevent sudden changes in the exposure which would cause the final image to "flicker" for the user, we are going to use the [last frame's exposure value]() to smoothly change the value we store in the image. That's it! We now have our average luminance value, which we can use with the equation above to calculate the exposure to prepare our image for tone mapping! Which is in the next blog post.
 
 ## Notes
 
