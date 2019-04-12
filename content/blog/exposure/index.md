@@ -20,7 +20,9 @@ This is a problem however, because (most) of our displays work differently. Disp
 
 ## Tone Mapping
 
-The solution then, is to take our physical, unbounded HDR values and map them first to a LDR linear space [0, 1], and then finally apply [gamma correction]() to produce the sRGB value our displays expect.
+The solution then, is to take our physical, unbounded HDR values and map them first to a LDR linear space [0, 1], and then finally apply [gamma correction]() to produce the sRGB value our displays expect. Here's a diagram that describes _the most basic_ tonemapping pipeline:
+
+[FIGURE]
 
 The way we perform the first step, mapping the HDR values produced by our fragment shader to linear LDR values is usually called _Tone Mapping_. There are a few different ways to perform it, and the way you choose to do it will have an effect on the "look" of your final frame, but the basic steps are:
 
@@ -85,12 +87,174 @@ Additionally, we haven't discussed how to actually calculated the average lumina
 
 The geometric average is susceptible to extreme values being over-represented in the final luminance value, so instead we're going to construct the histogram. This allows us more control (if we desire it) over how extreme values influence our average.
 
-### Tone Curves
+### Constructing the Luminence Histogram
 
-Once we have scaled our scene luminance by the exposure, we can now apply a _tone curve_. A tone curve is literally just a function that takes our exposed color value (that we obtained above) to
+To construct the histogram, I used [Alex Tardif's]() blog post on the exact same subject as a reference. I'll still explain the code here, and try to focus on the parts that confused me the most while trying to replicate Tardif's method. Here's the compute shader, written using BGFX's version of glsl:
+
+```glsl
+// This defines all the preprocessor definitions that translate things
+// like gl_LocalInvocationIndex to HLSL's SV_GroupIndex
+#include <bgfx_compute.sh>
+
+#define GROUP_SIZE 256
+#define THREADS_X 16
+#define THREADS_Y 16
+
+#define EPSILON 0.005
+// Taken from RTR vol 4 pg. 278
+#define RGB_TO_LUM vec3(0.2125, 0.7154, 0.0721)
+
+// Uniforms:
+uniform vec4 u_params;
+// u_params.x = mininumum log_2 luminance
+// u_params.y = inverse of the log_2 luminance range
+
+// Our two inputs, the read-only HDR color image, and the histogramBuffer
+IMAGE2D_RO(s_texColor, rgba16f, 0);
+BUFFER_RW(histogram, uint, 1);
+
+// Shared histogram buffer used for storing intermediate sums for each work group
+SHARED uint histogramShared[GROUP_SIZE];
+
+
+// For a given color and luminance range, return the histogram bin index
+uint colorToBin(vec3 hdrColor, float minLogLum, float inverseLogLumRange) {
+  // Convert our RGB value to Luminance, see note for RGB_TO_LUM macro above
+  float lum = dot(hdrColor, RGB_TO_LUM);
+
+  // Avoid taking the log of zero
+  if (lum < EPSILON) {
+    return 0;
+  }
+
+  // Calculate the log_2 luminance and express it as a value in [0.0, 1.0]
+  // where 0.0 represents the minimum luminance, and 1.0 represents the max.
+  float logLum = clamp((log2(lum) - minLogLum) * inverseLogLumRange, 0.0, 1.0);
+
+  // Map [0, 1] to [1, 255]. The zeroth bin is handled by the epsilon check above.
+  return uint(logLum * 254.0 + 1.0);
+}
+
+// 16 * 16 * 1 threads per group
+NUM_THREADS(THREADS_X, THREADS_Y, 1)
+void main() {
+  // Initialize the bin for this thread to 0
+  histogramShared[gl_LocalInvocationIndex] = 0;
+  groupMemoryBarrier();
+
+  uvec2 dim = imageSize(s_texColor).xy;
+  // Ignore threads that map to areas beyond the bounds of our HDR image
+  if (gl_GlobalInvocationID.x < dim.x && gl_GlobalInvocationID.y < dim.y) {
+    vec3 hdrColor = imageLoad(s_texColor, ivec2(gl_GlobalInvocationID.xy)).xyz;
+    uint binIndex = colorToBin(hdrColor, u_params.x, u_params.y);
+    // We use an atomic add to ensure we don't write to the same bin in our
+    // histogram from two different threads at the same time.
+    atomicAdd(histogramShared[binIndex], 1);
+  }
+
+  // Wait for all threads in the work group to reach this point before adding our
+  // local histogram to the global one
+  groupMemoryBarrier();
+
+  // Technically there's no chance that two threads write to the same bin here,
+  // but different work groups might! So we still need the atomic add.
+  atomicAdd(histogram[gl_LocalInvocationIndex], histogramShared[gl_LocalInvocationIndex]);
+}
+```
+
+This compute shader creates work groups of 256 threads (`NUM_THREADS`) that operate on 16 * 16 pixel chunks of our HDR input image. Each thread then operates on one pixel, assigning it a bin index for our histogram using its luminance value (`colorToBin`), increasing the count in the bin by one. The `NUM_THREADS` are chosen such that the `gl_LocalInvocationIndex` maps from 0 - 255 (since `16*16*1 == 255`), which is convenient for reasoning about how we access our histogram buffer, which has 256 bins. The figure below may help you visualize how the global work groups and individual invocations work to process the image:
+
+![Diagram of compute space mapping to image space](./grid_diagram.png)
+
+Each work group has a shared buffer, `histogramShared`, to store the counts only for the chunk of pixels it is operating over, but then the local results are added into our global `histogram` buffer at the end of the invocation. This allows us to avoid locking the global buffer for every pixel we operate on.
+
+It's also important to note that we use the shared buffer `histogramShared` to store the intermediate results for each work group, and then aggregate the results into the global `histogram` buffer only at the end of each invocation.
+
+After dispatching the compute shader with a work group size large enough to cover the entire image, the input buffer will now be filled with the histogram data.
+
+### Calculating the Average
+
+With the luminance buffer now in hand, we can our average. Since the buffer purely exists on the GPU, we can use another compute shader to find the average. This time, we're not mapping our compute space to a 2D image, but to our 1D histogram buffer instead. Additionally, instead of writing to the buffer, we'll be reading from the buffer and storing our value into a single-pixel R16F texture. So things will be a bit simpler than in the last program. Once again following [Alex Tardif's lead](), the compute shader is show below.
+
+```glsl
+#include "bgfx_compute.sh"
+
+#define GROUP_SIZE 256
+#define THREADS_X 256
+#define THREADS_Y 1
+
+// Uniforms:
+uniform vec4 u_params;
+#define minLogLum u_params.x
+#define logLumRange u_params.y
+#define timeCoeff u_params.z
+#define numPixels u_params.w
+
+// We'll be writing our average to s_target
+IMAGE2D_RW(s_target, r16f, 0);
+BUFFER_RW(histogram, uint, 1);
+
+// Shared
+SHARED uint histogramShared[GROUP_SIZE];
+
+NUM_THREADS(THREADS_X, THREADS_Y, 1)
+void main() {
+  // Get the count from the histogram buffer
+  uint countForThisBin = histogram[gl_LocalInvocationIndex];
+  histogramShared[gl_LocalInvocationIndex] = countForThisBin * gl_LocalInvocationIndex;
+
+  groupMemoryBarrier();
+
+  // Reset the count stored in the buffer in anticipation of the next pass
+  histogram[gl_LocalInvocationIndex] = 0;
+
+  // This loop will perform a weighted count of the luminance range
+  UNROLL
+  for (uint cuttoff = (GROUP_SIZE >> 1); cuttoff > 0; cuttoff >>= 1) {
+    if (uint(gl_LocalInvocationIndex) < cuttoff) {
+      histogramShared[gl_LocalInvocationIndex] += histogramShared[gl_LocalInvocationIndex + cuttoff];
+    }
+
+    groupMemoryBarrier();
+  }
+
+  // We only need to calculate this once, so only a single thread is needed.
+  if (gl_LocalInvocationIndex == 0) {
+    // Here we take our weighted sum and divide it by the number of pixels
+    // that had luminance greater than zero (since the index == 0, we can
+    // use countForThisBin to find the number of black pixels)
+    float weightedLogAverage = (histogramShared[0] / max(numPixels - float(countForThisBin), 1.0)) - 1.0;
+
+    // Map from our histogram space to actual luminance
+    float weightedAvgLum = exp2(((weightedLogAverage / 254.0) * logLumRange) + minLogLum);
+
+    // The new stored value will be interpolated using the last frames value
+    // to prevent sudden shifts in the exposure.
+    float lumLastFrame = imageLoad(s_target, ivec2(0, 0)).x;
+    float adaptedLum = lumLastFrame + (weightedAvgLum - lumLastFrame) * timeCoeff;
+    imageStore(s_target, ivec2(0, 0), vec4(adaptedLum, 0.0, 0.0, 0.0));
+  }
+}
+```
+
+The code is pretty simple. For each thread, we read in the histogram value and store it in a local variable. Then we use a shared buffer to store a _weighted count_. We also take this opportunity to reset the global histogram buffer so that it can be used in the next frame.
+
+the biggest trick here is the loop that accumulates the count into a single element of our shared buffer. It's a way of leveraging the parralellism of our compute space to perform the sums over two cells at a time, with the seperation between the two cells starting at `cutoff = NUM_THREADS / 2`, then being halved every iteration, until we end up with a distance of 0. The threads that have `gl_LocalInvocationIndex > cutoff` will be stalled, as they cannot contribute to the sum. The figure below illustrates the first few iterations for the thread with index `i`:
+
+![Illustration of parallelized aggregation](avg_diagram.png)
+
+In the diagram, the red regions of the buffer are summed with the blue regions and stored in the blue. In the next interation, the red regions become gray, indication that they are ignored for this (and all following) iterations. It's important to note that since the buffer sizes and the compute size is the same, we are actually stalling the threads corresponding to the red and gray regions with `if (uint(gl_LocalInvocationIndex) < cuttoff)` that can be seen in the code above. Only the blue regions are active. This may seem wasteful, but we'll still get an aggregation in `O(log_2(N))` iterations instead of `O(N)`, so the speed up is considerable over the naive, single threaded approach.
+
+At the end of the loop, we now have our weighted sum, which we can easily use to find our final "average" value. To do so, we first divide our weighted count (stored in by the aggregation above `histogramShared[0]`) and divide it by the number of pixels that actualy contribute _any_ luminance. So basically, we exclude the count that was stored in `histogram[0]` since those were the ones that fell below our threshold luminance value.
+
+Finally, we move from the histogram bin space back to actual luminance values by performing the inverse of the operation we performed when constructing the histogram. This gives us the actual average luminance value for this frame.
+
+However, to prevent sudden changes in the exposure which would cause the final image to "flicker" for the user, we are going to use the [last frame's exposure value]() to smoothly change the value we store in the image. That's it! We now have our average luminance value, which we can use with the equation above to calculate the exposure to prepare our image for tone mapping!
+
+### Tone mapping
 
 ## Notes
 
-1. This is not true for HDR displays. Those displays use other color spaces that newer games are starting to support. [LINK]
+1. This is not true for HDR displays. Those displays use other color spaces that newer games are starting to support. [Frostbite tone mapping link]()
 
 <!-- I've read about many different techniques in computer graphics on blogs, twitter and my copy of [Real Time Rendering](), but I've rarely actually gone through and implemented any of them. My previous attempts to start had be -->
