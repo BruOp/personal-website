@@ -64,7 +64,7 @@ $$
 
 Where $S$ is the Sensor sensitivity, $K$ is the reflected-light meter calibration constant, $q$ is the lens and vignetting attentuation, $H$ is the exposure and $L_{avg}$ is the average scene luminance.
 
-If we were fully modelling a physical camera, we might need to use different $S$ values to offset the loss of light when change aperture, which has effect on the depth of field. But since we aren't worrying about that, we'll use $S=100$. Meanwhile, it seems that Canon, Nikon and Sekonic all use $K = 12.5$ and it seems most rendering engines follow suit. Finally, $q=0.65$ appears similarly ubiquitous. If you want to know a bit more about what these quantities actually represent, the previously referenced [Lagard and de Rousiers, 2014](https://media.contentapi.ea.com/content/dam/eacom/frostbite/files/course-notes-moving-frostbite-to-pbr-v2.pdf) has more detail, as does the [Filament](https://google.github.io/filament/Filament.html#physicallybasedcamera) documentation.
+If we were fully modelling a physical camera, we might need to use different $S$ values to offset the loss of light when changing the aperture size, which also effects the depth of field. But since we aren't worrying about that, we'll use $S=100$. Meanwhile, it seems that Canon, Nikon and Sekonic all use $K = 12.5$ and it seems most rendering engines follow suit. Finally, $q=0.65$ appears similarly ubiquitous. If you want to know a bit more about what these quantities actually represent, the previously referenced [Lagard and de Rousiers, 2014](https://media.contentapi.ea.com/content/dam/eacom/frostbite/files/course-notes-moving-frostbite-to-pbr-v2.pdf) has more detail, as does the [Filament](https://google.github.io/filament/Filament.html#physicallybasedcamera) documentation.
 
 We can now rewrite our previous equation for $L_{max}$ more simply:
 
@@ -162,7 +162,7 @@ void main() {
 }
 ```
 
-This compute shader creates work groups of 256 threads (`NUM_THREADS`) that operate on 16 * 16 pixel chunks of our HDR input image. Each thread then operates on one pixel, assigning it a bin index for our histogram using its luminance value (`colorToBin`), increasing the count in the bin by one. The `NUM_THREADS` are chosen such that the `gl_LocalInvocationIndex` maps from 0 - 255 (since `16*16*1 == 255`), which is convenient for reasoning about how we access our histogram buffer, which has 256 bins. The figure below may help you visualize how the global work groups and individual invocations work to process the image:
+This compute shader creates work groups of 256 threads (`NUM_THREADS`) that operate on 16 * 16 pixel chunks of our HDR input image. Each thread then operates on one pixel, assigning it a bin index for our histogram using its luminance value (`colorToBin`), increasing the count in the bin by one. The `NUM_THREADS` are chosen such that the `gl_LocalInvocationIndex` maps from 0 - 255 (since `16*16\*1 == 255`), which is convenient for reasoning about how we access our histogram buffer, which has 256 bins. The figure below may help you visualize how the global work groups and individual invocations work to process the image:
 
 ![Diagram of compute space mapping to image space](./grid_diagram.png)
 
