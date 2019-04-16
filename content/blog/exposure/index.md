@@ -14,78 +14,79 @@ You can see that the lit areas are basically just the color of the light sources
 
 ### Physically Based Lighting
 
-In physically based rendering, objects are rendered using _physically based units_ from the fields of [Radiometry]() and [Photometry](). The [rendering equation]() is meant to produce the [radiance]() for each pixel. This means, for instance, that the lights are using the photometric unit of [lumens](), and both are set to emit 800 lm, but it could be much higher. The sun, a directional light, illuminates the earth's surface with ~120,000 [lux](). This means that when we solve the rendering equation for these objects, we're going to end up with values that are effectively unbounded and we may end up with radiance values that differ by several orders of magnitude in the same frame. Additionally, all of our calculations are taking place in linear space -- that is to say, that an RGB value corresponding to (1.0, 1.0, 1.0) corresponds to half as much radiance as a value of (2.0, 2.0, 2.0).
+In physically based rendering, objects are rendered using _physically based units_ from the fields of [Radiometry](https://en.wikipedia.org/wiki/Radiometry) and [Photometry](https://en.wikipedia.org/wiki/Photometry_(optics)). The [rendering equation](https://en.wikipedia.org/wiki/Rendering_equation) is meant to produce the [radiance](https://en.wikipedia.org/wiki/Radiance) for each pixel. In my example, the lights are using the photometric unit of [lumens](https://en.wikipedia.org/wiki/Lumen_(unit)), and both are set to emit 800 lm, but it could be much higher. The sun, a directional light, illuminates the earth's surface with ~120,000 [lux](https://en.wikipedia.org/wiki/Lux). This means that when we solve the rendering equation for these objects, we're going to end up with values that are effectively unbounded and we may end up with radiance values that differ by several orders of magnitude in the same frame. Additionally, all of our calculations are taking place in linear space -- that is to say, that an RGB value corresponding to (1.0, 1.0, 1.0) corresponds to half as much radiance as a value of (2.0, 2.0, 2.0).
 
 This is a problem however, because (most) of our displays work differently. Displays expects our frame buffer to contain RGB values in the [sRGB color space]() that are between 0 and 1, with (1.0, 1.0, 1.0) corresponding to white.<sup>[1](#note_1)</sup> So any RGB that our fragment shader produces are clamped to [0, 1] when they are written to the 32-bit back buffer. That's why everything appears to be basically white!
 
 ## Tone Mapping
 
-The solution then, is to take our physical, unbounded HDR values and map them first to a LDR linear space [0, 1], and then finally apply [gamma correction]() to produce the sRGB value our displays expect. Here's a diagram that describes _the most basic_ tonemapping pipeline:
+The solution then, is to take our physical, unbounded HDR values and map them first to a LDR linear space [0, 1], and then finally apply [gamma correction]() to produce the sRGB value our displays expect. Here's a diagram that describes the most basic tone mapping pipeline:
 
-[FIGURE]
+![Tone mapping pipeline](tonemapping_pipeline.png)
 
-The way we perform the first step, mapping the HDR values produced by our fragment shader to linear LDR values is usually called _Tone Mapping_. There are a few different ways to perform it, and the way you choose to do it will have an effect on the "look" of your final frame, but the basic steps are:
+The pipeline has 5 stages:
 
-1. Render your scene into a framebuffer that supports HDR values i.e. a floating point buffer with 16-bits or 32-bits per channel. Which one you choose is (as always) a tradeoff between precision and memory, but for my scene I'm going to go with a RGBA32F framebuffer. Make sure your output is in linear space.
-2. In a separate render pass, produce an LDR buffer by:
-   1. Scale the input using the exposure of the image to obtain a "calibrated" RGB value
-   2. Scale the calibrated value using a Tone Curve, inputting either the RGB or the Luminance value of the fragment
-   3. Apply gamma correction to the scaled value and write this result to the back buffer.
+1. Render your scene into a framebuffer that supports HDR values i.e. a floating point buffer with 16-bits or 32-bits per channel. Which one you choose is (as always) a tradeoff between precision, range and memory, but for my scene I'm going to go with a RGBA16F framebuffer. Make sure your output is in linear space.
+2. Using either mip mapping or compute shaders, find the average scene luminance using the HDR color buffer.
+3. In a separate render pass, produce a linear, clamped color buffer by:
+   1. Scaling the input using the average scene luminance to obtain a "calibrated" RGB value
+   2. Scaling the calibrated value using a Tone Curve, inputting either the RGB or the luminance value of the fragment
+4. Transform your linear clamped value using the inverse electrical optical transfer function (EOTF).
+   - With typical, non-HDR displays, we're basically transforming our linear color into sRGB color space by applying the inverse gamma transformation
+5. Write this non-linear result to the back buffer, which is presented to the user.
 
-If you're anything like me, you are probably asking yourself:
+In the figure, the green arrows indicate that the inputs/outputs are in linear space, while the orange arrow is in gamma space.
 
-- How do I actually obtain the "calibrated" fragment value? What does calibration even mean in this context?
-- What is a Tone Curve and which one should I use?
-- What is the difference between using the luminance value as input to the tone curve vs the RGB value?
+In the rest of this post, I'm going to tackle the second step of finding the average luminance value, and how we can use it to scale the input luminance. The third step is tackled in [the next post which is specifically on tone operators](/tonemapping).
 
-I'm going to tackle these one at a time, focusing first on calibration. Once we've made our choices, we'll revisit this task list and go into implementation.
+So first, let's explain the process of scaling the input luminance using Exposure.
 
 ### Exposure
 
-When a human eye views a scene, it will naturally dilate to adjust to the amount of light reaching it. Similarly, photographers have several ways to control the amount of light reaching the sensors, such as the aperture size (f-stop) and shutter speed. In photography, these controls correspond to the [exposure value](), or $EV$, which is a logarithmic representation of the luminance. Increasing the $EV$ by a value of +1 results in a doubling of the luminance. I won't spend too much time on $EV$ as I can't s
+When a human eye views a scene, it will naturally dilate to adjust to the amount of light reaching it. Similarly, photographers have several ways to control the amount of light reaching the sensors, such as the aperture size (f-stop) and shutter speed. In photography, these controls correspond to the [exposure value](https://en.wikipedia.org/wiki/Exposure_value), or $EV$, which is a logarithmic representation of the luminance. Increasing the $EV$ by a value of +1 results in a doubling of the luminance.
 
-In our context, the exposure linearly scales our the scene luminance to simulate how much light is actually hitting the sensor. It's up to us to actually provide the exposure value, but in order to avoid having it set by the user/artist, we're going to use the average scene luminance to derived from our HDR buffer to calculate the exposure.
+In our context, the exposure linearly scales our the scene luminance to simulate how much light is actually hitting the sensor. The reason we do this is to bring our input scene into the domain where our tone operators will scale the final values the way we expect. It took me a while to understand how this works compared to a camera, but it's actually basically the same idea. With a physical camera, the amount of photons hitting the sensors needs to be controlled such that we are able to resolve features, avoiding having too much or too little light.
 
-There are actually quite a few different ways to calculate exposure from average scene luminance, many of which are explained in this excellent post by [Krzysztof Narkowicz](https://knarkowicz.wordpress.com/2016/01/09/automatic-exposure/). Turns out that photography and film has been dealing with this problem for a much longer time that real time rendering, so there is an entire literature associated with this specific problem.
+It's up to us to actually provide the exposure value, but in order to avoid having it set by the user/artist, we're going to use the average scene luminance to derived from our HDR buffer to calculate the exposure.
 
-For this post, I'm going to use the method described in [Lagard and de Rousiers, 2014](https://media.contentapi.ea.com/content/dam/eacom/frostbite/files/course-notes-moving-frostbite-to-pbr-v2.pdf) (pg. 85). Long story short, first we can calculate the luminance value that will saturate the sensor, $L_{max}$, then use that to scale our scene luminance:
-
-$$
-EV_{100} = \log_{2} \left( \frac{S \times L_{avg}}{K} \right)
-$$
+There are actually quite a few different ways to calculate exposure from average scene luminance, many of which are explained in this excellent post by [Krzysztof Narkowicz](https://knarkowicz.wordpress.com/2016/01/09/automatic-exposure/). For this post, I'm going to use the method described in [Lagard and de Rousiers, 2014](https://media.contentapi.ea.com/content/dam/eacom/frostbite/files/course-notes-moving-frostbite-to-pbr-v2.pdf) (pg. 85). Basically, we can calculate the luminance value that will saturate the sensor, $L_{\text{max}}$, then use that to scale our scene luminance:
 
 $$
-L_{max} = \frac{78}{qS} \times 2^{EV_{100}} \\
+EV_{100} = \log_{2} \left(L_{\text{avg}} \frac{S}{K} \right)
 $$
 
 $$
-\text{H} = \frac{1}{L_{max}} \\
+L_{\text{max}} = \frac{78}{qS} \times 2^{EV_{100}} \\
 $$
 
-Where $S$ is the Sensor sensitivity, $K$ is the reflected-light meter calibration constant, $q$ is the lens and vignetting attentuation, $H$ is the exposure and $L_{avg}$ is the average scene luminance.
+$$
+\text{H} = \frac{1}{L_{\text{max}}} \\
+$$
+
+Where $S$ is the Sensor sensitivity, $K$ is the reflected-light meter calibration constant, $q$ is the lens and vignetting attentuation, $H$ is the exposure and $L_{\text{avg}}$ is the average scene luminance.
 
 If we were fully modelling a physical camera, we might need to use different $S$ values to offset the loss of light when changing the aperture size, which also effects the depth of field. But since we aren't worrying about that, we'll use $S=100$. Meanwhile, it seems that Canon, Nikon and Sekonic all use $K = 12.5$ and it seems most rendering engines follow suit. Finally, $q=0.65$ appears similarly ubiquitous. If you want to know a bit more about what these quantities actually represent, the previously referenced [Lagard and de Rousiers, 2014](https://media.contentapi.ea.com/content/dam/eacom/frostbite/files/course-notes-moving-frostbite-to-pbr-v2.pdf) has more detail, as does the [Filament](https://google.github.io/filament/Filament.html#physicallybasedcamera) documentation.
 
-We can now rewrite our previous equation for $L_{max}$ more simply:
+Simplifying our equations a bit and plugging in the numbers, We can now rewrite our previous equation for $L_{\text{max}}$ more simply:
 
 $$
-L_{max} = 9.6 \times L_{avg}
+L_{\text{max}} = 9.6 \times L_{\text{avg}}
 $$
 
 Our final scaled color is then simply:
 
 $$
-c_{rgb}^\prime = \text{Exposure} \times c_{rgb} = \frac{c_{rgb}}{L_{max}}
+c_{rgb}^\prime = \text{H} \times c_{rgb} = \frac{c_{rgb}}{L_{\text{max}}} = \frac{c_{rgb}}{9.6 \times L_{\text{avg}}}
 $$
 
 Note that this value is still not clamped to [0, 1], and so we will still potentially get a lot of clipping.
 
-Additionally, we haven't discussed how to actually calculated the average luminance. There are two primary ways to do so:
+Additionally, we haven't discussed how to actually calculated the average luminance. There are two popular ways to do so:
 
-- Use a geometric average, obtained by repeatedly downsampling the luminance of our HDR image similar to how we would create a mip map chain.
+- Use a geometric average, obtained by repeatedly downsampling the luminance of our HDR image (similar to a mip map chain).
 - Create a histogram of some static luminance range.
 
-The geometric average is susceptible to extreme values being over-represented in the final luminance value, so instead we're going to construct the histogram. This allows us more control (if we desire it) over how extreme values influence our average.
+The geometric average is susceptible to extreme values being over-represented in the final luminance value, so instead we're going to construct the histogram. This allows us more control (if we desire it) over how extreme values influence our "average", which doesn't necessarily have to be a true average but we'll continue referring to it that way.
 
 ### Constructing the Luminence Histogram
 
