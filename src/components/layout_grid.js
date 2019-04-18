@@ -5,7 +5,7 @@ import { media } from "../utils/style_helpers";
 
 const LayoutGrid = styled.div`
   display: grid;
-  max-width: 1024px;
+  max-width: 1280px;
   margin: auto;
   min-height: 100vh;
   padding: ${rhythm(0.75)} ${rhythm(1)} 0;
@@ -37,6 +37,7 @@ const LayoutGrid = styled.div`
 
   & > main {
     grid-area: main-content;
+    min-width: 0;
   }
 `;
 

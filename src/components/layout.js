@@ -5,6 +5,9 @@ import styled, { createGlobalStyle } from "styled-components";
 
 import Footer from "./footer";
 import { COLORS, media } from "../utils/style_helpers";
+
+import "prismjs/plugins/line-numbers/prism-line-numbers.css";
+import "./prism.css";
 import { rhythm } from "../utils/typography";
 
 const GlobalStyles = createGlobalStyle`

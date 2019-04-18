@@ -1,12 +1,14 @@
 ---
-title: Tone Mapping using a Luminance Histogram
+title: Automatic Exposure using a Luminance Histogram
 date: "2019-03-28T22:12:03.284Z"
 description: A guide to adding tone mapping to your physically based renderer
 ---
 
+_This is part one of two on tone mapping. The other part can be found [here](/tonemapping)_
+
 ## Introduction
 
-Recently, I've been building a small renderer using the cross-platform rendering library [bgfx](https://github.com/bkaradzic/bgfx) as a learning exercise. To start, I decided to load in some [glTF]() models and write a basic PBR shader using the Cook-Torrance model described in the [glTF specification](). The implementation is incomplete and it renders the material using only punctual lights. It's a single vertex + fragment shader. I loaded up the [FlightHelmet]() model, added two lights on each side, started up my program and saw this:
+Recently, I've been building a small renderer using the cross-platform rendering library [bgfx](https://github.com/bkaradzic/bgfx) as a learning exercise. To start, I decided to load in some [glTF](https://github.com/KhronosGroup/glTF-Sample-Models) models and write a basic PBR shader using the Cook-Torrance model described in the [glTF specification](https://github.com/KhronosGroup/glTF/blob/master/specification/2.0/README.md). The implementation is incomplete and it renders the material using only punctual lights. It's a single vertex + fragment shader. I loaded up the `FlightHelmet` model, added two lights on each side, started up my program and saw this:
 
 [IMAGE OF SHIT LDR IMAGE]
 
@@ -14,13 +16,13 @@ You can see that the lit areas are basically just the color of the light sources
 
 ### Physically Based Lighting
 
-In physically based rendering, objects are rendered using _physically based units_ from the fields of [Radiometry](https://en.wikipedia.org/wiki/Radiometry) and [Photometry](https://en.wikipedia.org/wiki/Photometry_(optics)). The [rendering equation](https://en.wikipedia.org/wiki/Rendering_equation) is meant to produce the [radiance](https://en.wikipedia.org/wiki/Radiance) for each pixel. In my example, the lights are using the photometric unit of [lumens](https://en.wikipedia.org/wiki/Lumen_(unit)), and both are set to emit 800 lm, but it could be much higher. The sun, a directional light, illuminates the earth's surface with ~120,000 [lux](https://en.wikipedia.org/wiki/Lux). This means that when we solve the rendering equation for these objects, we're going to end up with values that are effectively unbounded and we may end up with radiance values that differ by several orders of magnitude in the same frame. Additionally, all of our calculations are taking place in linear space -- that is to say, that an RGB value corresponding to (1.0, 1.0, 1.0) corresponds to half as much radiance as a value of (2.0, 2.0, 2.0).
+In physically based rendering, objects are rendered using _physically based units_ from the fields of [Radiometry](https://en.wikipedia.org/wiki/Radiometry) and [Photometry](<https://en.wikipedia.org/wiki/Photometry_(optics)>). The [rendering equation](https://en.wikipedia.org/wiki/Rendering_equation) is meant to produce the [radiance](https://en.wikipedia.org/wiki/Radiance) for each pixel. In my example, the lights are using the photometric unit of [lumens](<https://en.wikipedia.org/wiki/Lumen_(unit)>), and both are set to emit 800 lm, but it could be much higher. The sun, a directional light, illuminates the earth's surface with ~120,000 [lux](https://en.wikipedia.org/wiki/Lux). This means that when we solve the rendering equation for these objects, we're going to end up with values that are effectively unbounded and we may end up with radiance values that differ by several orders of magnitude in the same frame. Additionally, all of our calculations are taking place in linear space -- that is to say, that an RGB value corresponding to (1.0, 1.0, 1.0) corresponds to half as much radiance as a value of (2.0, 2.0, 2.0).
 
-This is a problem however, because (most) of our displays work differently. Displays expects our frame buffer to contain RGB values in the [sRGB color space]() that are between 0 and 1, with (1.0, 1.0, 1.0) corresponding to white.<sup>[1](#note_1)</sup> So any RGB that our fragment shader produces are clamped to [0, 1] when they are written to the 32-bit back buffer. That's why everything appears to be basically white!
+This is a problem however, because (most) of our displays work differently. Standard definition displays expects our frame buffer to contain RGB values in the [sRGB color space](https://en.wikipedia.org/wiki/SRGB) that are between 0 and 1, with (1.0, 1.0, 1.0) corresponding to white.<sup>[1](#note_1)</sup> So any RGB that our fragment shader produces are clamped to [0, 1] when they are written to the 32-bit back buffer. So we end up with clipped colors, and everything ends up being basically white!
 
 ## Tone Mapping
 
-The solution then, is to take our physical, unbounded HDR values and map them first to a LDR linear space [0, 1], and then finally apply [gamma correction]() to produce the sRGB value our displays expect. Here's a diagram that describes the most basic tone mapping pipeline:
+The solution then, is to take our physical, unbounded HDR values and map them first to a LDR linear space [0, 1], and then finally apply [gamma correction](http://blog.johnnovak.net/2016/09/21/what-every-coder-should-know-about-gamma/) to produce the sRGB value our displays expect. Here's a diagram that describes the most basic tone mapping pipeline:
 
 ![Tone mapping pipeline](tonemapping_pipeline.png)
 
@@ -86,11 +88,11 @@ Additionally, we haven't discussed how to actually calculated the average lumina
 - Use a geometric average, obtained by repeatedly downsampling the luminance of our HDR image (similar to a mip map chain).
 - Create a histogram of some static luminance range.
 
-The geometric average is susceptible to extreme values being over-represented in the final luminance value, so instead we're going to construct the histogram. This allows us more control (if we desire it) over how extreme values influence our "average", which doesn't necessarily have to be a true average but we'll continue referring to it that way.
+The geometric average is susceptible to extreme values being over-represented in the final luminance value, so instead we're going to construct the histogram. This allows us more control (if we desire it) over how extreme values influence our "average" -- with a histogram, we can choose to use other features, like the median, if we wanted to. For now, we'll stick with the average.
 
 ### Constructing the Luminence Histogram
 
-To construct the histogram, I used [Alex Tardif's]() blog post on the exact same subject as a reference. I'll still explain the code here, and try to focus on the parts that confused me the most while trying to replicate Tardif's method. Here's the compute shader, written using BGFX's version of glsl:
+To construct the histogram, I used [Alex Tardif's](http://www.alextardif.com/HistogramLuminance.html) blog post on the exact same subject as a reference. I'll still explain the code here, and try to focus on the parts that confused me the most while trying to replicate Tardif's method. Here's the compute shader, written using BGFX's version of glsl:
 
 ```glsl
 // This defines all the preprocessor definitions that translate things
@@ -107,7 +109,7 @@ To construct the histogram, I used [Alex Tardif's]() blog post on the exact same
 
 // Uniforms:
 uniform vec4 u_params;
-// u_params.x = mininumum log_2 luminance
+// u_params.x = minimum log_2 luminance
 // u_params.y = inverse of the log_2 luminance range
 
 // Our two inputs, the read-only HDR color image, and the histogramBuffer
@@ -175,7 +177,7 @@ After dispatching the compute shader with a work group size large enough to cove
 
 ### Calculating the Average
 
-With the luminance buffer now in hand, we can our average. Since the buffer purely exists on the GPU, we can use another compute shader to find the average. This time, we're not mapping our compute space to a 2D image, but to our 1D histogram buffer instead. Additionally, instead of writing to the buffer, we'll be reading from the buffer and storing our value into a single-pixel R16F texture. So things will be a bit simpler than in the last program. Once again following [Alex Tardif's lead](), the compute shader is show below.
+With the luminance buffer now in hand, we can our average. Since the buffer purely exists on the GPU, we can use another compute shader to find the average. This time, we're not mapping our compute space to a 2D image, but to our 1D histogram buffer instead. Additionally, instead of writing to the buffer, we'll be reading from the buffer and storing our value into a single-pixel R16F texture. So things will be a bit simpler than in the last program. Once again following [Alex Tardif's lead](http://www.alextardif.com/HistogramLuminance.html), the compute shader is show below.
 
 ```glsl
 #include "bgfx_compute.sh"
@@ -191,6 +193,8 @@ uniform vec4 u_params;
 #define timeCoeff u_params.z
 #define numPixels u_params.w
 
+#define localIndex gl_LocalInvocationIndex
+
 // We'll be writing our average to s_target
 IMAGE2D_RW(s_target, r16f, 0);
 BUFFER_RW(histogram, uint, 1);
@@ -201,26 +205,26 @@ SHARED uint histogramShared[GROUP_SIZE];
 NUM_THREADS(THREADS_X, THREADS_Y, 1)
 void main() {
   // Get the count from the histogram buffer
-  uint countForThisBin = histogram[gl_LocalInvocationIndex];
-  histogramShared[gl_LocalInvocationIndex] = countForThisBin * gl_LocalInvocationIndex;
+  uint countForThisBin = histogram[localIndex];
+  histogramShared[localIndex] = countForThisBin * localIndex;
 
   groupMemoryBarrier();
 
   // Reset the count stored in the buffer in anticipation of the next pass
-  histogram[gl_LocalInvocationIndex] = 0;
+  histogram[localIndex] = 0;
 
   // This loop will perform a weighted count of the luminance range
   UNROLL
-  for (uint cuttoff = (GROUP_SIZE >> 1); cuttoff > 0; cuttoff >>= 1) {
-    if (uint(gl_LocalInvocationIndex) < cuttoff) {
-      histogramShared[gl_LocalInvocationIndex] += histogramShared[gl_LocalInvocationIndex + cuttoff];
+  for (uint cutoff = (GROUP_SIZE >> 1); cutoff > 0; cutoff >>= 1) {
+    if (uint(localIndex) < cutoff) {
+      histogramShared[localIndex] += histogramShared[localIndex + cutoff];
     }
 
     groupMemoryBarrier();
   }
 
   // We only need to calculate this once, so only a single thread is needed.
-  if (gl_LocalInvocationIndex == 0) {
+  if (threadIndex == 0) {
     // Here we take our weighted sum and divide it by the number of pixels
     // that had luminance greater than zero (since the index == 0, we can
     // use countForThisBin to find the number of black pixels)
@@ -238,22 +242,30 @@ void main() {
 }
 ```
 
-The code is pretty simple. For each thread, we read in the histogram value and store it in a local variable. Then we use a shared buffer to store a _weighted count_. We also take this opportunity to reset the global histogram buffer so that it can be used in the next frame.
+For each thread, we read in the histogram value and store it in a local variable. Then we use a shared buffer to store a weighted count. We also take this opportunity to reset the global histogram buffer so that it can be used in the next frame. Take note that we've aliased
 
-the biggest trick here is the loop that accumulates the count into a single element of our shared buffer. It's a way of leveraging the parralellism of our compute space to perform the sums over two cells at a time, with the seperation between the two cells starting at `cutoff = NUM_THREADS / 2`, then being halved every iteration, until we end up with a distance of 0. The threads that have `gl_LocalInvocationIndex > cutoff` will be stalled, as they cannot contribute to the sum. The figure below illustrates the first few iterations for the thread with index `i`:
+the biggest trick here is the loop that accumulates the count into a single element of our shared buffer. It's a way of leveraging the parallel nature of our compute space to perform the sums over two cells at a time, with the separation between the two cells starting at `cutoff = NUM_THREADS / 2`, then being halved every iteration, until we end up with a distance of 0. The threads that have `gl_LocalInvocationIndex > cutoff` will be stalled, as they cannot contribute to the sum. The figure below illustrates the first few iterations for the thread with index `i`:
 
 ![Illustration of parallelized aggregation](avg_diagram.png)
 
-In the diagram, the red regions of the buffer are summed with the blue regions and stored in the blue. In the next interation, the red regions become gray, indication that they are ignored for this (and all following) iterations. It's important to note that since the buffer sizes and the compute size is the same, we are actually stalling the threads corresponding to the red and gray regions with `if (uint(gl_LocalInvocationIndex) < cuttoff)` that can be seen in the code above. Only the blue regions are active. This may seem wasteful, but we'll still get an aggregation in `O(log_2(N))` iterations instead of `O(N)`, so the speed up is considerable over the naive, single threaded approach.
+In the diagram, the red regions of the buffer are summed with the blue regions and stored in the blue. In the next interation, the red regions become gray, indication that they are ignored for this (and all following) iterations. It's important to note that since the buffer sizes and the compute size is the same, we are actually stalling the threads corresponding to the red and gray regions with `if (uint(gl_LocalInvocationIndex) < cutoff)` that can be seen in the code above. Only the blue regions are active. This may seem wasteful, but we'll still get an aggregation in `O(log_2(N))` iterations instead of `O(N)`, so the speed up is considerable over the naive, single threaded approach.
 
-At the end of the loop, we now have our weighted sum, which we can easily use to find our final "average" value. To do so, we first divide our weighted count (stored in by the aggregation above `histogramShared[0]`) and divide it by the number of pixels that actualy contribute _any_ luminance. So basically, we exclude the count that was stored in `histogram[0]` since those were the ones that fell below our threshold luminance value.
+At the end of the loop, we now have our weighted sum, which we can easily use to find our final "average" value. To do so, we first divide our weighted count (stored in by the aggregation above `histogramShared[0]`) and divide it by the number of pixels that contribute _any_ luminance -- we exclude the count that was stored in `histogram[0]` since those were the ones that fell below our threshold luminance value.
 
 Finally, we move from the histogram bin space back to actual luminance values by performing the inverse of the operation we performed when constructing the histogram. This gives us the actual average luminance value for this frame.
 
-However, to prevent sudden changes in the exposure which would cause the final image to "flicker" for the user, we are going to use the [last frame's exposure value]() to smoothly change the value we store in the image. That's it! We now have our average luminance value, which we can use with the equation above to calculate the exposure to prepare our image for tone mapping! Which is in the next blog post.
+However, to prevent sudden changes in the exposure which would cause the final image to "flicker" for the user, we are going to use the [last frame's exposure value](https://google.github.io/filament/Filament.html#mjx-eqn-adaptation) to smoothly change the value we store in the image. That's it! We now have our $L_{avg}$ value, which we can use with the equation above to calculate the exposure to prepare our image for tone mapping! Which is in the next blog post.
+
+## Code Sample
+
+There's a working example of this code running as part of a BGFX-style example here: https://github.com/BruOp/bgfx/tree/tonemapping/examples/41-tonemapping
 
 ## Notes
 
-1. This is not true for HDR displays. Those displays use other color spaces that newer games are starting to support. [Frostbite tone mapping link]()
+1. This is not true for HDR displays. Those displays use other color spaces that [newer games are starting to support](https://www.ea.com/frostbite/news/high-dynamic-range-color-grading-and-display-in-frostbite).
+
+## References
+
+While I've tried to diligently link to my references, I also have a general collection of links on tone mapping [here](https://github.com/BruOp/3d_programming_references#tone-mapping).
 
 <!-- I've read about many different techniques in computer graphics on blogs, twitter and my copy of [Real Time Rendering](), but I've rarely actually gone through and implemented any of them. My previous attempts to start had be -->
