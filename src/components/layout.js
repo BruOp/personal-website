@@ -21,6 +21,12 @@ const GlobalStyles = createGlobalStyle`
   a:visited {
     color: ${COLORS.secondary}
   }
+
+  figcaption {
+    margin-top: 0;
+    text-align: center;
+    font-style: italic;
+  }
 `;
 
 const MainContent = styled.main`

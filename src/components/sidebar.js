@@ -89,7 +89,7 @@ let SideBar = function({ className }) {
               />
               <SideBarBlurb>
                 <h2>{author}'s Blog</h2>
-                <p>This blog chronicles the topics in real time rendering I'm learning about.</p>
+                <p>This blog chronicles the topics in computer graphics that I'm learning about.</p>
                 <NavList />
                 <SocialLinks />
               </SideBarBlurb>

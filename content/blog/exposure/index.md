@@ -1,6 +1,6 @@
 ---
 title: Automatic Exposure using a Luminance Histogram
-date: "2019-03-28T22:12:03.284Z"
+date: "2019-04-19T12:00:14.063Z"
 description: A guide to adding tone mapping to your physically based renderer
 ---
 
@@ -8,11 +8,15 @@ _This is part one of two on tone mapping. The other part can be found [here](/to
 
 ## Introduction
 
-Recently, I've been building a small renderer using the cross-platform rendering library [bgfx](https://github.com/bkaradzic/bgfx) as a learning exercise. To start, I decided to load in some [glTF](https://github.com/KhronosGroup/glTF-Sample-Models) models and write a basic PBR shader using the Cook-Torrance model described in the [glTF specification](https://github.com/KhronosGroup/glTF/blob/master/specification/2.0/README.md). The implementation is incomplete and it renders the material using only punctual lights. It's a single vertex + fragment shader. I loaded up the `FlightHelmet` model, added two lights on each side, started up my program and saw this:
+Recently, I've been building a small renderer using the cross-platform rendering library [bgfx](https://github.com/bkaradzic/bgfx) as a learning exercise. It loads [glTF](https://github.com/KhronosGroup/glTF-Sample-Models) models, shading them using the Cook-Torrance model described in the [glTF specification](https://github.com/KhronosGroup/glTF/blob/master/specification/2.0/README.md). The implementation is incomplete and it renders the material using only punctual lights. It's a single vertex + fragment shader. I loaded up the `FlightHelmet` model, added two lights on each side, started up my program and saw this:
 
-[IMAGE OF SHIT LDR IMAGE]
+![Renderer output without tone mapping](beforeTonemapping.png)
 
 You can see that the lit areas are basically just the color of the light sources, with ugly, uniform splotches removing all of the detail we'd expect to get from the normal maps and albedo textures. This is not unexpected. It may not be obvious why this isn't a bug and why we'd expect our fragment shader to produce such an ugly image, so let me quickly explain.
+
+What we want in the end is this:
+
+![Renderer output with tone mapping](../tonemapping/afterReinhard2.png)
 
 ### Physically Based Lighting
 
@@ -258,7 +262,7 @@ However, to prevent sudden changes in the exposure which would cause the final i
 
 ## Code Sample
 
-There's a working example of this code running as part of a BGFX-style example here: https://github.com/BruOp/bgfx/tree/tonemapping/examples/41-tonemapping
+The images of the bunny were created using a BGFX-style example that you can find [here](https://github.com/BruOp/bgfx/tree/tonemapping/examples/41-tonemapping). It includes the set up of the scene and GPU resources as well as the shaders that we've already gone over.
 
 ## Notes
 
