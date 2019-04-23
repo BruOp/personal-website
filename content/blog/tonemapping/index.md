@@ -62,6 +62,7 @@ void main()
   vec3 rgb = texture2D(s_texColor, v_texcoord0).rgb;
   float avgLum = texture2D(s_texAvgLum, v_texcoord0).r;
 
+  // Yxy.x is Y, the luminance
   vec3 Yxy = convertRGB2Yxy(rgb);
 
   float whitePoint   = u_tonemap.y;
@@ -170,11 +171,11 @@ Also, if you read the last post, you may recall that I presented the following i
 
 ![Renderer output without tone mapping](../exposure/beforeTonemapping.png)
 
-Note that this image lacks Gamma correction so it looks especially bad, but most of the damage is done by having the luminance values outside of the acceptable [0, 1] range. It is technically physically correct, but our display doesn't care. Here is the same scene with tone mapping applied using the modified Reinhard curve:
+Note that this image lacks Gamma correction so it looks especially bad, but most of the damage is done by having the luminance values outside of the acceptable [0, 1] range. It is technically physically correct, but our display doesn't care. Here is the same scene with tone mapping applied using the modified Reinhard curve, plus gamma correction:
 
 ![Renderer output with tone mapping](../tonemapping/afterReinhard2.png)
 
-Hopefully the stark difference demonstrates the need for tone mapping if you are attempting to implement PBR shading _with actual physical values_ for your lights. Unlike the images above, where we could still make sense of the blown out highlights, here it's just impossible to get a proper image without abandoning physically meaningful lighting.
+Hopefully the stark difference demonstrates the need for tone mapping if you are attempting to implement PBR shading _with actual physical values_ for your lights. Unlike the bunny images above, where we could still make sense of the blown out highlights, here it's just impossible to get a proper image without abandoning physically meaningful lighting.
 
 ## Code Sample
 

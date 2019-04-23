@@ -12,9 +12,7 @@ Recently, I've been building a small renderer using the cross-platform rendering
 
 ![Renderer output without tone mapping](beforeTonemapping.png)
 
-You can see that the lit areas are basically just the color of the light sources, with ugly, uniform splotches removing all of the detail we'd expect to get from the normal maps and albedo textures. This is not unexpected. It may not be obvious why this isn't a bug and why we'd expect our fragment shader to produce such an ugly image, so let me quickly explain.
-
-What we want in the end is this:
+You can see that the lit areas are basically just the color of the light sources, with ugly, uniform splotches removing all of the detail we'd expect to get from the normal maps and albedo textures. This is not unexpected. It may not be obvious why this isn't a bug and why we'd expect our fragment shader to produce such an ugly image, so let me quickly explain. And just so you know what the final image is meant to look like, here's the same scene after tone mapping:
 
 ![Renderer output with tone mapping](../tonemapping/afterReinhard2.png)
 
@@ -53,7 +51,13 @@ When a human eye views a scene, it will naturally dilate to adjust to the amount
 
 In our context, the exposure linearly scales our the scene luminance to simulate how much light is actually hitting the sensor. The reason we do this is to bring our input scene into the domain where our tone operators will scale the final values the way we expect. It took me a while to understand how this works compared to a camera, but it's actually basically the same idea. With a physical camera, the amount of photons hitting the sensors needs to be controlled such that we are able to resolve features, avoiding having too much or too little light.
 
-It's up to us to actually provide the exposure value, but in order to avoid having it set by the user/artist, we're going to use the average scene luminance to derived from our HDR buffer to calculate the exposure.
+It's up to us to actually provide the exposure value, but in order to avoid having it set by the user/artist, we're going to use the average scene luminance to derived from our HDR buffer to calculate the exposure. Before getting into that, it's worth quickly defining lumiance as a function of our RGB color:
+
+$$
+L = 0.2125R + 0.7154G + 0.0721B
+$$
+
+Where R, G, and B correspond to the radiance values of the different channels stored in our HDR buffer. This is part of the [CIE xyY color space](https://ninedegreesbelow.com/photography/xyz-rgb.html), and the coefficients come from the [Luminosity function](https://en.wikipedia.org/wiki/Luminosity_function) for the specific wavelenghts corresponding to Red, Green, and Blue respectively.
 
 There are actually quite a few different ways to calculate exposure from average scene luminance, many of which are explained in this excellent post by [Krzysztof Narkowicz](https://knarkowicz.wordpress.com/2016/01/09/automatic-exposure/). For this post, I'm going to use the method described in [Lagard and de Rousiers, 2014](https://media.contentapi.ea.com/content/dam/eacom/frostbite/files/course-notes-moving-frostbite-to-pbr-v2.pdf) (pg. 85). Basically, we can calculate the luminance value that will saturate the sensor, $L_{\text{max}}$, then use that to scale our scene luminance:
 
@@ -79,10 +83,10 @@ $$
 L_{\text{max}} = 9.6 \times L_{\text{avg}}
 $$
 
-Our final scaled color is then simply:
+Our final scaled luminace is then simply:
 
 $$
-c_{rgb}^\prime = \text{H} \times c_{rgb} = \frac{c_{rgb}}{L_{\text{max}}} = \frac{c_{rgb}}{9.6 \times L_{\text{avg}}}
+L^\prime = \text{H} \times L = \frac{c_{rgb}}{L_{\text{max}}} = \frac{L}{9.6 \times L_{\text{avg}}}
 $$
 
 Note that this value is still not clamped to [0, 1], and so we will still potentially get a lot of clipping.
@@ -246,9 +250,9 @@ void main() {
 }
 ```
 
-For each thread, we read in the histogram value and store it in a local variable. Then we use a shared buffer to store a weighted count. We also take this opportunity to reset the global histogram buffer so that it can be used in the next frame. Take note that we've aliased
+For each thread, we read in the histogram value and store it in a local variable. Then we use a shared buffer to store a weighted count. We also take this opportunity to reset the global histogram buffer so that it can be used in the next frame. Also note that I've aliased `gl_LocalInvocationIndex` with `localIndex` in this specific example.
 
-the biggest trick here is the loop that accumulates the count into a single element of our shared buffer. It's a way of leveraging the parallel nature of our compute space to perform the sums over two cells at a time, with the separation between the two cells starting at `cutoff = NUM_THREADS / 2`, then being halved every iteration, until we end up with a distance of 0. The threads that have `gl_LocalInvocationIndex > cutoff` will be stalled, as they cannot contribute to the sum. The figure below illustrates the first few iterations for the thread with index `i`:
+It may not be obvious what the loop is doing (it certainly wasn't to me), but it's simpler than it looks. It accumulates the count into a single element of our shared buffer, leveraging the parallel nature of our compute space to perform the sums over two cells at a time. The separation between the two cells starts at `cutoff = GROUP_SIZE >> 1 = GROUP_SIZE / 2`, and is then halved every iteration (`cutoff >>= 1`), until we end up with a distance of 0. The threads that have `gl_LocalInvocationIndex > cutoff` will be stalled, as they cannot contribute to the sum. The figure below illustrates the first few iterations for the thread with index `i`:
 
 ![Illustration of parallelized aggregation](avg_diagram.png)
 
@@ -258,7 +262,7 @@ At the end of the loop, we now have our weighted sum, which we can easily use to
 
 Finally, we move from the histogram bin space back to actual luminance values by performing the inverse of the operation we performed when constructing the histogram. This gives us the actual average luminance value for this frame.
 
-However, to prevent sudden changes in the exposure which would cause the final image to "flicker" for the user, we are going to use the [last frame's exposure value](https://google.github.io/filament/Filament.html#mjx-eqn-adaptation) to smoothly change the value we store in the image. That's it! We now have our $L_{avg}$ value, which we can use with the equation above to calculate the exposure to prepare our image for tone mapping! Which is in the next blog post.
+However, to prevent sudden changes in the exposure which would cause the final image to "flicker" for the user, we are going to use the [last frame's exposure value](https://google.github.io/filament/Filament.html#mjx-eqn-adaptation) to smoothly change the value we store in the image. That's it! We now have our $L_{avg}$ value, which we can use with the equation above to calculate the exposure to prepare our image for tone mapping! Which is in the [next post](/tonemapping).
 
 ## Code Sample
 
