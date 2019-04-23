@@ -1,5 +1,5 @@
 ---
-title: Automatic Exposure using a Luminance Histogram
+title: Automatic Exposure Using a Luminance Histogram
 date: "2019-04-19T12:00:14.063Z"
 description: A guide to adding tone mapping to your physically based renderer
 ---
@@ -94,7 +94,7 @@ Additionally, we haven't discussed how to actually calculated the average lumina
 
 The geometric average is susceptible to extreme values being over-represented in the final luminance value, so instead we're going to construct the histogram. This allows us more control (if we desire it) over how extreme values influence our "average" -- with a histogram, we can choose to use other features, like the median, if we wanted to. For now, we'll stick with the average.
 
-### Constructing the Luminence Histogram
+### Constructing the Luminance Histogram
 
 To construct the histogram, I used [Alex Tardif's](http://www.alextardif.com/HistogramLuminance.html) blog post on the exact same subject as a reference. I'll still explain the code here, and try to focus on the parts that confused me the most while trying to replicate Tardif's method. Here's the compute shader, written using BGFX's version of glsl:
 

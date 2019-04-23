@@ -6,7 +6,7 @@ description: A guide to adding tone mapping to your physically based renderer
 
 ## Introduction
 
-In [the last post](/blog/exposure), I explained how to can calculate the exposure of an HDR image, like the ones produced by in physically based rendering. This exposure allows us to basically "calibrate" our image such that we scale the luminance values to a range where we can now apply a tone curve. In case you didn't read the post, here's the diagram explaining the workflow:
+In [the last post](/exposure), I explained how to can calculate the exposure of an HDR image, like the ones produced by in physically based rendering. This exposure allows us to basically "calibrate" our image such that we scale the luminance values to a range where we can now apply a tone curve. In case you didn't read the post, here's the diagram explaining the workflow:
 
 ![Tone mapping pipeline](../exposure/tonemapping_pipeline.png)
 
@@ -163,7 +163,7 @@ Other things to explore in this topic:
 
 - Localized tone mapping. In this post, we've used a single exposure value to map the entire image, but human eyes are a bit more complex than that. [Bart Wronski](https://bartwronski.com/2016/08/29/localized-tonemapping/) has a good post that goes in depth into what limitations you'll encounter with a global tone mapping operator.
 - Technically, we are calculating our exposure using scene-referred luminance after we've multiplied it by the albedo of our materials. It would be more technically correct to use the luminance pre-albedo, but that would require an additional framebuffer of just those values, and my understanding is that this technique is largely avoided.
-- We applied our exposure after already rendering our scene in linear HDR space, but this means that your HDR buffer must have enough range to handle your highest radiance values. This can be tough with a RGBA16F buffer, as the max value is 65,504. Instead of dealing with the potential of "infinite" radiance being captured in the HDR buffer, [Lagard and de Rousiers, 2014](https://media.contentapi.ea.com/content/dam/eacom/frostbite/files/course-notes-moving-frostbite-to-pbr-v2.pdf) and others "pre-expose" their lights based off the last frames' luminance.
+- We applied our exposure after already rendering our scene in linear HDR space, but this means that the HDR buffer must have enough range to handle extreme radiance values. This can be tough with a RGBA16F buffer, as the max value is 65,504. Instead of dealing with the potential of "infinite" radiance being captured in the HDR buffer, [DICE](https://media.contentapi.ea.com/content/dam/eacom/frostbite/files/course-notes-moving-frostbite-to-pbr-v2.pdf) and others "pre-expose" their lights based off the last frames' luminance.
 - This post is specifically for rendering to SDR displays. HDR displays use different encodings, and there is no industry standard quite yet, but it means the workflow is slightly different. [Krzysztof Narkowicz](https://knarkowicz.wordpress.com/2016/08/31/hdr-display-first-steps/) has a blog post explaining first steps to supporting HDR along with some additional resources on the subject.
 
 Also, if you read the last post, you may recall that I presented the following image as output from my toy physically based renderer, **without** tone mapping:
