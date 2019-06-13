@@ -49,6 +49,9 @@ class BlogPostTemplate extends React.Component {
             )}
           </li>
         </ul>
+
+        <div id="commento" />
+        <script defer src="https://cdn.commento.io/js/commento.js" />
       </Layout>
     );
   }
