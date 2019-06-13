@@ -137,7 +137,7 @@ Each of the tone curves will produce a slightly different "look" to the final im
 
 I should also note that the choice to apply the curve to the Luminance values exclusively rather than each RGB channel individually is a choice. John Hable [advocates the latter approach](http://filmicworlds.com/blog/filmic-tonemapping-with-piecewise-power-curves/), but this will result in shifts in Hue. [This presentation by the Frostbite team](https://www.ea.com/frostbite/news/high-dynamic-range-color-grading-and-display-in-frostbite) provides an example of hue preserving vs non-hue preserving tone mapping.
 
-I tried out both methods, and I think that John Hable is probably right here. Applying it solely to the luminance produces some weird behaviour, especially around the sun and highlights, but it also clearly shifts the hue of the final image. The following figure shows the difference for three of our previous curves: ACES, Uchimura, and Lottes.
+I tried out both methods, and I think that John Hable is probably right here. Applying it solely to the luminance produces some weird behaviour, especially around the sun and highlights, precisely because it does not shift the hue of the final image. The extremely bright blue of the sky gets clamped, staying blue, but really it'd probably be better if it "saturated" the pixel and remained white. The following figure shows the difference for three of our previous curves: ACES, Uchimura, and Lottes.
 
 ```grid|2|On the left, the curve is applied to only the luminance; on the right it is applied per RGB channel.
 ![ACES curve](ACES.png)
