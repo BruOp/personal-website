@@ -1,5 +1,7 @@
 import React from "react";
 import { Link, graphql } from "gatsby";
+import TalkyardCommentsIframe from "@debiki/gatsby-plugin-talkyard";
+
 import Layout from "../components/layout";
 import SEO from "../components/seo";
 import { rhythm } from "../utils/typography";
@@ -50,8 +52,7 @@ class BlogPostTemplate extends React.Component {
           </li>
         </ul>
 
-        <div id="commento" />
-        <script defer src="https://cdn.commento.io/js/commento.js" />
+        <TalkyardCommentsIframe />
       </Layout>
     );
   }

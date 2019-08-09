@@ -85,5 +85,11 @@ module.exports = {
         pathToConfigModule: `src/utils/typography`,
       },
     },
+    {
+      resolve: "@debiki/gatsby-plugin-talkyard",
+      options: {
+        talkyardServerUrl: "https://comments-for-bruop-github-io.talkyard.net",
+      },
+    },
   ],
 };
