@@ -10,12 +10,17 @@ description: A guide to adding image based lighting that uses a multi-scattering
 - [x] Talk about difficulty performing monte carlo integration naively
 - [x] Talk about solution of importance sampling
 - [x] Introduce past work from Karis on solving the equation offline
-- [ ] Talk about problem with single single scattering as roughness increases
+- [x] Talk about problem with single single scattering as roughness increases
   - Furnace test
-- [ ] Talk about recent attempts to address problem, introduce Fdez Aguera
-- [ ] Show implementation
+- [x] Talk about recent attempts to address problem, introduce Fdez Aguera
+- [x] Show implementation
 - [ ] Show comparisons for furnace and in pisa
 - [ ] Investigate PI in the denominator of the diffuse part of the equation
+- [ ] Add conclusion
+- [ ] Add further work
+- [ ] Add missing screenshots
+- [ ] Decide whether this needs to be split up into two blog posts or not
+- [ ] Edit! Consider where we figures might help explain things
 
 ## Introduction and Background
 
@@ -351,8 +356,7 @@ $$
     }{
         D(\mathbf{h}) \langle \mathbf{n} \cdot \mathbf{h} \rangle
     }  \langle\mathbf{n} \cdot \mathbf{l}_k\rangle
-=
-\frac{1}{N} \sum_{k=1}^{N}
+= \frac{1}{N} \sum_{k=1}^{N}
     F(\mathbf{v}\cdot\mathbf{h})
     \frac{
         G(\mathbf{v},\mathbf{l},\mathbf{h}) \langle \mathbf{v} \cdot \mathbf{h} \rangle
@@ -364,14 +368,17 @@ $$
 At this point, we've managed to factor out the NDF but our sum is still dependent on both $\mathbf{v}$, $\text{roughness}$ (through the $G$ term) and $F_0$ (through the Fresnel term). The $F0$ term in particular is annoying, because each material will have a potentially different $F0$ term, but we don't want to have to store a different LUT for each material. But let's substitute our Schlick's Fresnel equation and moving things around a bit:
 
 $$
-= F_0 \left(\frac{1}{N} \sum_{k=1}^{N}
+\begin{aligned}
+= &F_0 \left(\frac{1}{N} \sum_{k=1}^{N}
     \frac{
         G(\mathbf{v},\mathbf{l}_k,\mathbf{h}_k) \langle \mathbf{v} \cdot \mathbf{h}_k \rangle
     }{
         \langle\mathbf{n}\cdot\mathbf{v}\rangle \langle \mathbf{n} \cdot \mathbf{h}_k \rangle
     }
     (1 - (1 - \langle \mathbf{v} \cdot \mathbf{h}_k \rangle)^5)
-\right) + \left(
+\right)
+\\
+& + \left(
         \frac{1}{N} \sum_{k=1}^{N}
         \frac{
             G(\mathbf{v},\mathbf{l}_k,\mathbf{h}_k) \langle \mathbf{v} \cdot \mathbf{h}_k \rangle
@@ -379,10 +386,9 @@ $$
             \langle\mathbf{n}\cdot\mathbf{v}\rangle \langle \mathbf{n} \cdot \mathbf{h}_k \rangle
         }
         (1 - \langle \mathbf{v} \cdot \mathbf{h}_k \rangle)^5 \right)
-$$
-
-$$
-= F_0 k_a + k_b
+\\
+= &F_0 k_a + k_b
+\end{aligned}
 $$
 
 Where $k_a, k_b$ are the _scale_ and the _bias_ terms applied to $F_0$. You may ask yourself what we have accomplished by doing all this, but notice that $k_a, k_b$ are only dependent on $\text{roughness}$ and $\mathbf{h}_k$/$\mathbf{l}_k$ (recall that we sample $\mathbf{h}_k$ to find $\mathbf{l}_k$). For $\mathbf{n}$ we'll set it to some constant (like the positive z-direction). We can then create a two dimensional LUT where the x-axis is $\langle \mathbf{n} \cdot \mathbf{v} \rangle$ and the y-axis is $\text{roughness}$. The red channel of this LUT will be $k_a$ while the green channel will be $k_b$.
@@ -561,4 +567,201 @@ As the material becomes rougher, the multiscattering events account for a larger
 
 ## Accounting for Multi-scattering Events
 
-Luckily for us, there's been a significant amount of work done on improving our approximation in order to somehow account for multiple scattering events. [Heitz et al.]() presented their work on modelling the problem as a free-path problem, validating their results by simulating each successive scattering event across triangular meshes using ray tracing. However, their work is too slow for production path tracing, nevermind real time interactive graphics. In the next few years, [Kulla and Conty](https://blog.selfshadow.com/publications/s2017-shading-course/imageworks/s2017_pbs_imageworks_slides_v2.pdf) presented their own alternative to recovering the energy based on "the furnace test", but it requires additional 2D and 3D LUTs and was meant to be a path tracing solution. Additionally, [Emmanuel Turquin](https://blog.selfshadow.com/publications/turquin/ms_comp_final.pdf) built upon the Heitz paper to model the additional scattering events by noting that Heitz's paper showed the additional scattering events to have lobes resembling smaller versions of the first event's lobe. If you're interested in understanding the problem, these papers all provide clear explanations and alternative solutions, but unfortunately none are quite meant for real time image based lighting.
+Luckily for us, there's been a significant amount of work done on improving our approximation in order to somehow account for multiple scattering events. [Heitz et al.]() presented their work on modelling the problem as a free-path problem, validating their results by simulating each successive scattering event across triangular meshes using ray tracing. However, their work is too slow for production path tracing, nevermind real time interactive graphics.
+
+In the next few years, [Kulla and Conty](https://blog.selfshadow.com/publications/s2017-shading-course/imageworks/s2017_pbs_imageworks_slides_v2.pdf) presented their own alternative to recovering the energy based on "the furnace test", but it requires additional 2D and 3D LUTs and was meant to be a path tracing solution. Additionally, [Emmanuel Turquin](https://blog.selfshadow.com/publications/turquin/ms_comp_final.pdf) built upon the Heitz paper to model the additional scattering events by noting that Heitz's paper showed the additional scattering events to have lobes resembling smaller versions of the first event's lobe.
+
+Unfortunately none of these solutions are meant for real time, but just this year [Fdez-Agüera](http://www.jcgt.org/published/0008/01/03/paper.pdf) published a paper outlining how we could extend the methods outlined by Karis, without having to introduce any additional LUTs or parameters. The paper provides a full mathematical derivation, but I'll try to provide the highlights.
+
+First, let's consider a perfect reflector with no diffuse lobe, where $F = 1$. In this case, the total amount of energy reflected regardless of number of bounces must always be equal to the incident energy (due to conservation of energy):
+
+$$
+1 = E_{ss} + E_{ms} => E_{ms} = 1 - E_{ss}
+$$
+
+Where $E_{ss}$ is our directional albedo, but with $F = 1$:
+
+$$
+E_{ss} = \int_{\Omega} \frac{
+    D(\mathbf{h}) G(\mathbf{v},\mathbf{l},\mathbf{h})
+}{
+    4 \langle\mathbf{n}\cdot\mathbf{l}\rangle \langle\mathbf{n}\cdot\mathbf{v}\rangle
+}  \langle\mathbf{n} \cdot \mathbf{l}\rangle d\mathbf{l}
+$$
+
+To define $E_{ms}$, we can express it in the same fashion, but with an unknown BRDF:
+
+$$
+E_{ms} = \int_{\Omega} f_{ms} \langle\mathbf{n} \cdot \mathbf{l}\rangle d\mathbf{l} = 1 - E_{ss}
+$$
+
+So we could effectively add this additional lobe to our reflectance equation:
+
+$$
+\begin{aligned}
+L_o(\mathbf{v}, \mathbf{p}) = \int_{\Omega} f_{\text{ss}} + f_{\text{ms}}) L_i(\mathbf{l}, \mathbf{p}) \langle\mathbf{n} \cdot \mathbf{l}\rangle d\mathbf{l}
+\\
+&= \int_{\Omega} f_{\text{ss}} L_i(\mathbf{l}, \mathbf{p}) \langle\mathbf{n} \cdot \mathbf{l}\rangle d\mathbf{l} + \int_{\Omega} f_{\text{ms}} L_i(\mathbf{l}, \mathbf{p}) \langle\mathbf{n} \cdot \mathbf{l}\rangle d\mathbf{l}
+\end{aligned}
+$$
+
+We've already discussed the integral on the left, so let's focus exclusively on the second integral. We'll once again use the split sum introduced by Karis, but here Fdez-Agüera makes the assumption that we can consider the secondary scattering events to be mostly diffuse, and therefore use irradiance as a solution to the second integral:
+
+$$
+\int_{\Omega} f_{\text{ms}} L_i(\mathbf{l}, \mathbf{p}) \langle\mathbf{n} \cdot \mathbf{l}\rangle d\mathbf{l} = \int_{\Omega} f_{\text{ms}} \langle\mathbf{n} \cdot \mathbf{l}\rangle d\mathbf{l} \int_{\Omega} \frac{L_i(\mathbf{l}, \mathbf{p})}{\pi} \langle\mathbf{n} \cdot \mathbf{l}\rangle d\mathbf{l}
+\\
+= (1 - E_{ss}) \int_{\Omega} \frac{L_i(\mathbf{l}, \mathbf{p})}{\pi} \langle\mathbf{n} \cdot \mathbf{l}\rangle d\mathbf{l}
+$$
+
+Fdez-Agüera further notes that this approximation fails for narrow lights, such as analytical point or directional lights. Interestingly, [Stephen McAuley](http://advances.realtimerendering.com/s2019/index.htm) made the clever observation that this multiscattering term will only dominate at higher roughnesses, where our radiance map is going to be highly blurred and fairly diffuse. His comparison shows little difference, so if you weren't previously using irradiance you could potentially skip it here as well. However we've already created our irradiance map, so we will be using it again here.
+
+And so, if we use the approximation from earlier for the single scattering event, and bring in this approximation for the multiscattering event, we end up with the following:
+
+$$
+L_o(\mathbf{v}, \mathbf{p}) = \left( k_a + k_b \right) \text{radiance} + (1 - E_{ss}) \text{irradiance}
+$$
+
+Where $k_a, k_b$ are the scale and bias terms from Karis that we've stored in our LUT.
+
+Recall, however, that we've constrained ourselves to a perfectly reflecting metal here. So in order to extend it to generic metals, we need to re-introduce $F$. Like others, Fdez-Agüera splits $F$ into two terms, $F_{ss}$ and $F_{ms}$ such that:
+
+$$
+E = F_{ss} E_{ss} + F_{ms} E_{ms}
+$$
+
+However, unlike previously, we cannot simply set $E=1$. Instead, Fdez-Agüera models $F_{ms}$ as a geometric series such that:
+
+$$
+E = F_{ss} E_{ss} + \sum_{k=1}^{\inf} F_{ss} E_{ss} (1 - E_{\text{avg}})^k F_{\text{avg}}^k =
+$$
+
+Where $F_{\text{avg}}$ and $E_{\text{avg}}$ are defined as:
+
+$$
+F_{\text{avg}} = F_0 + \frac{1}{21} (1 - F_0), E_{\text{avg}} = E_{ss}
+$$
+
+You'll have to check the papers for the details on this I'm afraid, as I don't want to entirely reproduce the paper in this blog post. The conclusion is that we can therefore write our equation for $L_o$ as the following:
+
+$$
+L_o(\mathbf{v}, \mathbf{p}) = \left( F_0 k_a + k_b \right) \text{radiance} + \frac{(F_0 k_a + k_b)F_{\text{avg}}}{1 - F_{\text{avg}}(1 - E_{ss})} (1 - E_{ss}) \text{irradiance}
+$$
+
+Let's take a second and look at some renders of metals with this new formulation. We should no longer see the darkening as the roughness increases, and the two images below demonstrate that the term mostly succeeds:
+
+TODO: Renders of furnace test split in two
+
+TODO: Renders of pisa split in two
+
+One important thing to mention is that we see an increase in saturation at the higher roughnesses not unlike what [Heitz](), [Kulla and Conty](https://blog.selfshadow.com/publications/s2017-shading-course/imageworks/s2017_pbs_imageworks_slides_v2.pdf) and [Hill](https://blog.selfshadow.com/2018/06/04/multi-faceted-part-1/) see. Whether this is desired behaviour is up to you. It appears Turqin's method does _not_ produce these shifts in saturation, so that may be worth investigation for you if saturation is to be avoided at all cost.
+
+Phew, that's a lot to take in... However, we haven't talked about how diffuse fits into this at all. Let's first examine how dielectrics behave in the furnace test:
+
+TODO: Render of dielectrics in furnace
+
+As we can see, at lower roughnesses the fresnel effect is too strong, and there is still some brightening at higher roughnesses. Luckily, we can continue with our current approach and consider a perfectly white dielectric in the furnace test:
+
+$$
+E = 1 = F_{ss} E_{ss} + F_{ms} E_{ms} + E_{\text{diffuse}}
+$$
+
+This approximation ignores some of the physical reality of diffuse transmission and re-emission, but Fdez-Agüera makes a good argument for why we can keep ignoring them:
+
+> It doesn’t explicitly model the effects of light scattering back and forth between the diffuse and specular interfaces, but since specular reflectance is usually quite low and unsaturated for dielectrics, radiated energy will eventually escape the surface unaltered, so the approximation holds. [(p. 52)]()
+
+To extend to non-white dielectrics, we can simply multiply it by the diffuse albedo, $c_{\text{diff}}$.
+
+$$
+\begin{aligned}
+F_{ss}E_{ss} &= \left( F_0 k_a + k_b \right) \times \text{radiance},
+\\
+F_{ms}E_{ms} &= \frac{E_{ss} F_{\text{avg}}}{1 - F_{\text{avg}}(1 - E_{ss})} (1 - E_{ss}) \times \text{irradiance},
+\\
+K_d &= c_{\text{diff}} (1 - F_{ss} E_{ss} + F_{ms} E_{ms}) \times \text{irradiance},
+\\
+L_o &= F_{ss}E_{ss} + F_{ms}E_{ms} + K_d
+\end{aligned}
+$$
+
+Let's look at our final results:
+
+TODO: Render of dielectrics in furnace
+TODO: Render balls with split
+
+And here's the final shader code, using the BRDF LUT, prefitlered environment map, and irradiance map as uniform arguments:
+
+```glsl
+$input v_position, v_normal, v_tangent, v_bitangent, v_texcoord
+
+#include "../common/common.sh"
+#include "pbr_helpers.sh"
+
+#define DIELECTRIC_SPECULAR 0.04
+#define BLACK vec3(0.0, 0.0, 0.0)
+
+// Scene
+uniform vec4 u_envParams;
+#define numEnvLevels u_envParams.x
+
+uniform vec4 u_cameraPos;
+
+// Material
+SAMPLER2D(s_diffuseMap, 0);
+SAMPLER2D(s_normalMap, 1);
+SAMPLER2D(s_metallicRoughnessMap, 2);
+
+// IBL Stuff
+SAMPLER2D(s_brdfLUT, 3);
+SAMPLERCUBE(s_prefilteredEnv, 4);
+SAMPLERCUBE(s_irradiance, 5);
+
+void main()
+{
+    mat3 tbn = mat3FromCols(
+        normalize(v_tangent),
+        normalize(v_bitangent),
+        normalize(v_normal)
+    );
+    vec3 normal = texture2D(s_normalMap, v_texcoord).xyz * 2.0 - 1.0;
+    normal = normalize(mul(tbn, normal));
+
+    vec3 viewDir = normalize(u_cameraPos.xyz - v_position);
+
+    vec4 baseColor = texture2D(s_diffuseMap, v_texcoord);
+    vec3 OccRoughMetal = texture2D(s_metallicRoughnessMap, v_texcoord).xyz;
+
+    vec3 lightDir = reflect(-viewDir, normal);
+    vec3 H = normalize(lightDir + viewDir);
+    float NoV = clamp(dot(normal, viewDir), 1e-5, 1.0);
+
+    float roughness = OccRoughMetal.y;
+    float metalness = OccRoughMetal.z;
+    float occlusion = OccRoughMetal.x;
+    vec3 F0 = mix(vec3_splat(DIELECTRIC_SPECULAR), baseColor.xyz, metalness);
+
+    vec2 f_ab = texture2D(s_brdfLUT, vec2(NoV, roughness)).xy;
+    float lodLevel = roughness * numEnvLevels;
+    vec3 radiance = textureCubeLod(s_prefilteredEnv, lightDir, lodLevel).xyz;
+    vec3 irradiance = textureCubeLod(s_irradiance, normal, 0).xyz;
+
+    vec3 Fr = max(vec3_splat(1.0 - roughness), F0) - F0;
+    vec3 k_S = F0 + Fr * pow(1.0 - NoV, 5.0);
+
+    vec3 FssEss = k_S * f_ab.x + f_ab.y;
+
+    float Ess = f_ab.x + f_ab.y;
+    float Ems = 1.0 - Ess;
+    vec3 F_avg = F0 + (1.0 - F0) / 21.0;
+    vec3 Fms = FssEss / (1.0 - Ems * F_avg);
+
+    vec3 k_D = baseColor.xyz * (1 - (FssEss + Fms * Ems));
+    vec3 color = FssEss * radiance + (Fms * Ems + k_D) * irradiance;
+
+    color = occlusion * color * baseColor.w;
+    gl_FragColor = vec4(color, baseColor.w);
+}
+```
+
+Notice how little code is actually for calculating our new terms -- most of it is just texture reads and setup. Finally, to demonstrate the output with a more complicated mesh (and for a bit of continuity with the other blog posts), let's render the Flight Helmet gltf model:
+
+TODO: Add flight helmet screenshot
