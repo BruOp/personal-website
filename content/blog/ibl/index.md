@@ -6,7 +6,7 @@ description: A guide to adding image based lighting that uses a multi-scattering
 
 ## TODO
 
-- [ ] Introduce IBL problem using rendering equation
+- [x] Introduce IBL problem using rendering equation
 - [x] Talk about difficulty performing monte carlo integration naively
 - [x] Talk about solution of importance sampling
 - [x] Introduce past work from Karis on solving the equation offline
@@ -24,7 +24,7 @@ description: A guide to adding image based lighting that uses a multi-scattering
 
 ## Introduction and Background
 
-Recently I decided to implement image based lighting in BGFX, since I had never implemented image based lighting before and it's a great way to get assets authored for PBR looking really great. Additionally, I knew that the task was not trivial from reading [Karis's 2014 paper]() explaining Unreal's PBR implementation in order to implement discrete analytical lights. I'll discuss the challenge more later, but let's first introduce the problem a bit more formally. Let's consider equation for evaluating the reflectance of an opaque surface:
+Recently I decided to implement image based lighting in BGFX, since I had never implemented image based lighting before and it's a great way to get assets authored for PBR looking really great. However, reading [Karis's 2014 paper](https://cdn2.unrealengine.com/Resources/files/2013SiggraphPresentationsNotes-26915738.pdf) explaining Unreal's PBR implementation, I realized the task would require quite a bit of work. I'll discuss the challenge more later, but let's first introduce the problem a bit more formally. Let's consider equation for evaluating the reflectance of an opaque surface:
 
 $$
 L_o(\mathbf{v}, \mathbf{p}) = \int_{\Omega} f_{\text{brdf}}(\mathbf{v}, \mathbf{l}, \mathbf{p}) L_i(\mathbf{l}, \mathbf{p}) \langle\mathbf{n} \cdot \mathbf{l}\rangle d\mathbf{l}
@@ -32,20 +32,35 @@ $$
 
 Where $\mathbf{v}$ is our viewing angle, $f_{\text{brdf}}(\mathbf{v}, \mathbf{l}, \mathbf{p})$ is our bidirectional reflectance distribution function, $L_i(\mathbf{l}, \mathbf{p})$ is the radiance incident on point $\mathbf{p}$ from direction $-\mathbf{l}$, and $\mathbf{n}$ is the normal vector at point $\mathbf{p}$.
 
-For our BRDF we will use the popular Cook-Torrance microfacet model:
+For our BRDF, we will take the popular approach of using a Lambertian diffuse lobe and Cook-Torrance microfacet model for our specular lobe:
 
 $$
-f_{\text{brdf}}(\mathbf{v}, \mathbf{l}) =
+\begin{aligned}
+f_{\text{brdf}}(\mathbf{v}, \mathbf{l}) &= f_{\text{specular}}(\mathbf{v}, \mathbf{l}) + f_{\text{diffuse}},
+\\\\
+f_{\text{specular}}(\mathbf{v}, \mathbf{l}) &=
     \frac{
         D(\mathbf{h}) F(\mathbf{v}\cdot\mathbf{h}) G(\mathbf{v},\mathbf{l},\mathbf{h})
     }{
         4 \langle\mathbf{n}\cdot\mathbf{l}\rangle \langle\mathbf{n}\cdot\mathbf{v}\rangle
-    } + f_{\text{diffuse}}
+    },
+\\
+f_{\text{diffuse}} &= \frac{c_{\text{diff}}}{\pi},
+\end{aligned}
 $$
 
-where $\mathbf{h}$ is the halfway vector, halfway between $\mathbf{l}$ and $\mathbf{v}$. This direction is important, as $G$, our normal distribution function (NDF) tells use what proportion of the microfacets have normals aligned with $\mathbf{h}$, therefore reflecting the light from $-\mathbf{l}$ in the direction $\mathbf{v}$. For more detail on this model, there are many resources but [Naty Hoffman's talk](https://blog.selfshadow.com/publications/s2013-shading-course/hoffman/s2013_pbs_physics_math_slides.pdf) from this [2013 Siggraph workshop](https://blog.selfshadow.com/publications/s2013-shading-course/) is very helpful in explaining this BRDF if you've never seen it before. There's also $f_{\text{diffuse}}$, which is a Lambertian diffuse term which I'll go into later. We'll be focusing mostly on the specular term for this post.
+Where $\mathbf{h}$ is the halfway vector, halfway between $\mathbf{l}$ and $\mathbf{v}$. This direction is important, as our normal distribution function (NDF, represented by $D$) tells us what proportion of our perfectly reflecting microfacets will have normals aligned with $\mathbf{h}$, therefore reflecting the light from $-\mathbf{l}$ in the direction $\mathbf{v}$. $F$ is the Fresnel term which defines what proportion of light is reflected as opposed to refracted into the surface. $G$ is the "self shadowing term", which basically defines what proportion of our microfacets will be occluded by the surrounding surface in the direction $\mathbf{l}$.
 
-To make sure there's no ambiguity, we're using the following functions for $D$, $G$, and $F$. For the normal distribution function $D$, we're using [Disney's GGX]():
+For more detail on this model, there are many resources but [Naty Hoffman's talk](https://blog.selfshadow.com/publications/s2013-shading-course/hoffman/s2013_pbs_physics_math_slides.pdf) from this [2013 Siggraph workshop](https://blog.selfshadow.com/publications/s2013-shading-course/) is very helpful in explaining this BRDF if you've never seen it before. I'll also come back and explicitly define the functions we're using for $D$, $G$ and $F$ below.
+
+For the constant diffuse term, we'll be using the [GLTF spec](https://github.com/KhronosGroup/glTF/blob/master/specification/2.0/README.md#materials) for determining $c_{\text{diff}}$, which allows for a single albedo texture used by both metals and dielectrics:
+
+```glsl
+const float DIELECTRIC_SPECULAR = 0.04;
+diffuseColor = lerp(albedo.rgb * (1 - DIELECTRIC_SPECULAR), vec3(0.0), metalness)
+```
+
+To make sure there's no ambiguity, we're using the following functions for $D$, $G$, and $F$. For the normal distribution function $D$, we're using the [GGX](https://cdn2.unrealengine.com/Resources/files/2013SiggraphPresentationsNotes-26915738.pdf) formulation:
 
 $$
 D(\mathbf{h}) = \frac{
@@ -57,13 +72,47 @@ $$
 
 where $\alpha = \text{roughness}^2$. Roughness, AKA perceptually linear roughness, will be an input into our shading model, stored as a channel in our textures.
 
-Meanwhile, for our geometric shadowing/attenuation term $G$ we're using the
+Meanwhile, for our geometric shadowing/attenuation term $G$ we're using the height correlated Smith function for GGX:
 
-TODO: Finish writing up the BRDF info.
+$$
+\begin{aligned}
+V(\mathbf{v}, \mathbf{l}) &=
+\frac{
+    G(\mathbf{v},\mathbf{l},\mathbf{h})
+}{
+    4 \langle\mathbf{n}\cdot\mathbf{l}\rangle \langle\mathbf{n}\cdot\mathbf{v}\rangle
+},
+\\
+V(\mathbf{v}, \mathbf{l}) &= \frac{0.5}{
+    \langle \mathbf{n}\cdot\mathbf{l} \rangle \sqrt{(\mathbf{n}\cdot\mathbf{v})^2 (\alpha^2 - 1) + \alpha^2}
++
+    \langle \mathbf{n}\cdot\mathbf{v} \rangle \sqrt{(\mathbf{n}\cdot\mathbf{l})^2 (\alpha^2 - 1) + \alpha^2}
+}
+\end{aligned}
+$$
+
+Notice we've expressed this in a way that incorporates the denominator of the BRDF into our $V$ term. For more detail on this term, please see [this section](https://google.github.io/filament/Filament.html#materialsystem/specularbrdf) of the Filament documentation.
+
+Finally, our Fresnel term will use the Schlick approximation:
+
+$$
+\begin{aligned}
+F(\mathbf{v}, \mathbf{l}) &= F_0 + (1 - F_0)(1 - \langle \mathbf{v} \cdot \mathbf{h} \rangle)^5
+\\ &= F_0 (1 - (1 - \langle \mathbf{v} \cdot \mathbf{h} \rangle)^5) + (1 - \langle \mathbf{v} \cdot \mathbf{h} \rangle)^5
+\end{aligned}
+$$
+
+Where $F_0$ is a material property representing the specular reflectance at incident angles ($\mathbf{l} = \mathbf{n}$). For dielectrics, this is taken to be a uniform 4% as per the [GLTF spec](https://github.com/KhronosGroup/glTF/blob/master/specification/2.0/README.md#materials), while for metals we can use the albedo channel in the texture:
+
+```glsl
+F_0 = lerp(vec3(DIELECTRIC_SPECULAR), albedo.rgb, metalness);
+```
+
+## Integrating for Image Based Lighting
 
 Okay, so that's our BRDF and the rendering equation we're trying to solve for every pixel we evaluate for our mesh. Let's turn our attention now to the hemisphere $\Omega$ we need to integrate across. In order to do so, we need to be able to evaluate $L_i(\mathbf{l}, \mathbf{p})$ for any given $\mathbf{l}$. In real time applications, we have two approaches, often used together:
 
-1. Describe $L_i(\mathbf{l}, \mathbf{p})$ using a set of $N$ analytical lights. Then, we only need to evaluate the integral N times, for each corresponding light direction $\mathbf{l_i}$.
+1. Describe $L_i(\mathbf{l}, \mathbf{p})$ using a set of $N$ analytical lights. Then, we only need to evaluate the integral N times, for each corresponding light direction $\mathbf{l}_i$.
 2. Describe $L_i(\mathbf{l}, \mathbf{p})$ using an _environment map_, often using a [_cube map_](https://en.wikipedia.org/wiki/Cube_mapping).
 
 We'll be focused on item 2 in this post. While an environment map can provide much more realistic lighting, the naive evaluation of our hemispherical integral is not going to cut it for interactive computer graphics. To gain a quick understanding of the challenges involved, consider the following:
@@ -188,7 +237,7 @@ The first sum is what's commonly referred to as the "Pre-filtered Environment Ma
 
 Notice the anisotropic reflections on the right that we lose with the approximation. Taken from the [_Moving Frostbite to PBR_ course notes](https://seblagarde.files.wordpress.com/2015/07/course_notes_moving_frostbite_to_pbr_v32.pdf). While the error is large, it's the price we must pay to be able to perform this sum outside of our render loop when $\mathbf{v}$ is known.
 
-We can further improve the rate of convergence by filtering our _samples_ as well. The idea is described in detail in [Křivánek and Colbert's GPU Gems article](https://developer.nvidia.com/gpugems/GPUGems3/gpugems3_ch20.html) and I will provide a quick summary. When using our importance sampling routine, we evaluate the PDF value for the sample, and if it is "small" then this corresponds to a direction we sample infrequently. As a result, we can model this as sampling a larger solid angle in our hemisphere. The inverse is also true: samples with higher PDF values will correspond to smaller solid angles. But how do we sample a larger or small solid angle in our environment without just having to integrate again? Well we can use the mip map chain of the environment map! It's a very clever trick, and it lets us use even fewer samples.
+We can further improve the rate of convergence by filtering our _samples_ as well. The idea is described in detail in [Křivánek and Colbert's GPU Gems article](https://developer.nvidia.com/gpugems/GPUGems3/gpugems3_ch20.html) and I will provide a quick summary. When using our importance sampling routine, we evaluate the PDF value for the sample, and if it is "small" then this corresponds to a direction we sample inequently. As a result, we can model this as sampling a larger solid angle in our hemisphere. The inverse is also true: samples with higher PDF values will correspond to smaller solid angles. But how do we sample a larger or small solid angle in our environment without just having to integrate again? Well we can use the mip map chain of the environment map! It's a very clever trick, and it lets us use even fewer samples.
 
 When it comes to storing the pre-filtered environment map, it's important to note once again that we're creating a different map for different roughness levels of our choosing. Since we'll lose high frequency information as roughness increases, we can actually use mip map layers to store the filtered map, with higher roughnesses corresponding to higher mip levels.
 
@@ -765,3 +814,5 @@ void main()
 Notice how little code is actually for calculating our new terms -- most of it is just texture reads and setup. Finally, to demonstrate the output with a more complicated mesh (and for a bit of continuity with the other blog posts), let's render the Flight Helmet gltf model:
 
 TODO: Add flight helmet screenshot
+
+While I've included most of the shader code used, the entire example is available [here](https://github.com/bruop/bae) as `04-pbl-ibl`. Note however that it uses non-standard GLTF files, that have had their web-compatible textures swapped out with corresponding DDS files that contain mip maps, generated using the `texturec` tool provided as part of BGFX. BGFX does not provide an easy way to invoke the equivalent of `glGenerateMipmap`, so I've created a little python script to pre-process the GLTF files.
