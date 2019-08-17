@@ -14,12 +14,10 @@ description: A guide to adding image based lighting that uses a multi-scattering
   - Furnace test
 - [x] Talk about recent attempts to address problem, introduce Fdez Aguera
 - [x] Show implementation
-- [ ] Show comparisons for furnace and in pisa
-- [ ] Investigate PI in the denominator of the diffuse part of the equation
-- [ ] Add conclusion
-- [ ] Add further work
-- [ ] Add missing screenshots
-- [ ] Decide whether this needs to be split up into two blog posts or not
+- [x] Show comparisons for furnace and in pisa
+- [x] Investigate PI in the denominator of the diffuse part of the equation
+- [x] Add further work
+- [x] Add missing screenshots
 - [ ] Edit! Consider where we figures might help explain things
 
 ## Introduction and Background
@@ -266,8 +264,6 @@ for (float mipLevel = 0; mipLevel <= maxMipLevel; ++mipLevel)
 Then our computer shader looks like the following:
 
 ```glsl
-#include "bgfx_compute.sh"
-
 // Contains our hammersley sequence and our importance sampling function
 #include "pbr_helpers.sh"
 
@@ -283,28 +279,6 @@ uniform vec4 u_params;
 
 SAMPLERCUBE(s_source, 0);
 IMAGE2D_ARRAY_WR(s_target, rgba16f, 1);
-
-// Reverse lookup from uvw to world coords
-vec3 toWorldCoords(ivec3 globalId, float size)
-{
-    vec2 uvc = (vec2(globalId.xy) + 0.5) / size;
-    uvc = 2.0 * uvc - 1.0;
-    uvc.y *= -1.0;
-    switch (globalId.z) {
-    case 0:
-        return vec3(1.0, uvc.y, -uvc.x);
-    case 1:
-        return vec3(-1.0, uvc.y, uvc.x);
-    case 2:
-        return vec3(uvc.x, 1.0, -uvc.y);
-    case 3:
-        return vec3(uvc.x, -1.0, uvc.y);
-    case 4:
-        return vec3(uvc.x, uvc.y, 1.0);
-    default:
-        return vec3(-uvc.x, uvc.y, -1.0);
-    }
-}
 
 // From Karis, 2014
 vec3 prefilterEnvMap(float roughness, vec3 R, float imgSize)
@@ -377,7 +351,7 @@ void main()
 
 I also wrote a [small ShaderToy example](https://www.shadertoy.com/view/WtBSRR) that lets you visualize this for different levels of roughness. The mouse allows you to change the roughness amount. Let's take a look at the resulting output for the [Pisa environment map]():
 
-TODO: Insert environment map
+![Environment map in linear space for different roughness levels. Note that the size of the mips has been scaled to match the original image size. Also note the banding is due to GIF enconding.](./pisa_radiance.gif)
 
 ### Environment BRDF
 
@@ -441,10 +415,6 @@ $$
 $$
 
 Where $k_a, k_b$ are the _scale_ and the _bias_ terms applied to $F_0$. You may ask yourself what we have accomplished by doing all this, but notice that $k_a, k_b$ are only dependent on $\text{roughness}$ and $\mathbf{h}_k$/$\mathbf{l}_k$ (recall that we sample $\mathbf{h}_k$ to find $\mathbf{l}_k$). For $\mathbf{n}$ we'll set it to some constant (like the positive z-direction). We can then create a two dimensional LUT where the x-axis is $\langle \mathbf{n} \cdot \mathbf{v} \rangle$ and the y-axis is $\text{roughness}$. The red channel of this LUT will be $k_a$ while the green channel will be $k_b$.
-
-So here's what that looks like as a texture:
-
-TODO: insert texture
 
 I used a compute shader that just gets run once and the resulting LUT is stored in a RG16F texture. Here's the compute shader code to perform the calculation:
 
@@ -591,7 +561,7 @@ void main()
     vec3 radiance = textureCubeLod(s_prefilteredEnv, lightDir, lodLevel).xyz;
     vec3 irradiance = textureCubeLod(s_irradiance, normal, 0).xyz;
 
-    vec3 color = (F0 * k_ab.x + k_ab.y) * radiance + (diffuseColor) * irradiance / PI;
+    vec3 color = (F0 * f_ab.x + f_ab.y) * radiance + (diffuseColor) * irradiance / PI;
 
     color = occlusion * color * baseColor.w;
     gl_FragColor = vec4(color, baseColor.w);
@@ -602,11 +572,11 @@ You might notice that both the value for `F0` and for `diffuseColor` are derived
 
 So let's take a look at the results! Here's a render of spheres of increasing roughness (from left to right) that uses the [Pisa courtyard environment map](http://gl.ict.usc.edu/Data/HighResProbes/):
 
-TODO: Insert Render of balls
+![Rendering of spheres of increasing roughness, from left to right. Top row is metal, bottom rows are dielectric.](./pisa_single_scattering_balls.png)
 
-We can see how as the roughness increases, we're using our blurrier roughness maps. However, you may also be able to notice that as roughness increases, the metal spheres become darker. One way we can demonstrate this fully is to render the spheres in a totally white environment, where $L_i(\mathbf{l}) = 1$ for all directions $\mathbf{l}$. This is also commonly referred to as a "furnace test":
+We can see how as the roughness increases, we're using our blurrier prefiltered environment maps. However, you may also be able to notice that as roughness increases, the metal spheres become darker. One way we can demonstrate this fully is to render the spheres in a totally white environment, where $L_i(\mathbf{l}) = 1$ for all directions $\mathbf{l}$. This is also commonly referred to as a "furnace test":
 
-TODO: Insert render of "furnace test"
+![Rendering the spheres inside an environment with constant $L_i = 0.5$](./single_scattering_furnace.png)
 
 Here's it's very obvious that something is amiss. Physically, there's no reason why our metal would become this much darker even as roughness increases. The reason this is occurring within our model is that we are using a first order approximation which includes only the single scattering events. In reality, light will scatter several times across the surface, as demonstrated in this illustration:
 
@@ -614,7 +584,7 @@ TODO: Insert illustration from paper or naty hoffman's talk or something
 
 As the material becomes rougher, the multiscattering events account for a larger proportion of the reflected energy, and our approximation break down.
 
-## Accounting for Multi-scattering Events
+## Accounting for Multiple-Scattering
 
 Luckily for us, there's been a significant amount of work done on improving our approximation in order to somehow account for multiple scattering events. [Heitz et al.]() presented their work on modelling the problem as a free-path problem, validating their results by simulating each successive scattering event across triangular meshes using ray tracing. However, their work is too slow for production path tracing, nevermind real time interactive graphics.
 
@@ -648,7 +618,7 @@ So we could effectively add this additional lobe to our reflectance equation:
 
 $$
 \begin{aligned}
-L_o(\mathbf{v}, \mathbf{p}) = \int_{\Omega} f_{\text{ss}} + f_{\text{ms}}) L_i(\mathbf{l}, \mathbf{p}) \langle\mathbf{n} \cdot \mathbf{l}\rangle d\mathbf{l}
+L_o(\mathbf{v}, \mathbf{p}) &= \int_{\Omega} f_{\text{ss}} + f_{\text{ms}}) L_i(\mathbf{l}, \mathbf{p}) \langle\mathbf{n} \cdot \mathbf{l}\rangle d\mathbf{l}
 \\
 &= \int_{\Omega} f_{\text{ss}} L_i(\mathbf{l}, \mathbf{p}) \langle\mathbf{n} \cdot \mathbf{l}\rangle d\mathbf{l} + \int_{\Omega} f_{\text{ms}} L_i(\mathbf{l}, \mathbf{p}) \langle\mathbf{n} \cdot \mathbf{l}\rangle d\mathbf{l}
 \end{aligned}
@@ -657,9 +627,11 @@ $$
 We've already discussed the integral on the left, so let's focus exclusively on the second integral. We'll once again use the split sum introduced by Karis, but here Fdez-Agüera makes the assumption that we can consider the secondary scattering events to be mostly diffuse, and therefore use irradiance as a solution to the second integral:
 
 $$
-\int_{\Omega} f_{\text{ms}} L_i(\mathbf{l}, \mathbf{p}) \langle\mathbf{n} \cdot \mathbf{l}\rangle d\mathbf{l} = \int_{\Omega} f_{\text{ms}} \langle\mathbf{n} \cdot \mathbf{l}\rangle d\mathbf{l} \int_{\Omega} \frac{L_i(\mathbf{l}, \mathbf{p})}{\pi} \langle\mathbf{n} \cdot \mathbf{l}\rangle d\mathbf{l}
+\begin{aligned}
+\int_{\Omega} f_{\text{ms}} L_i(\mathbf{l}, \mathbf{p}) \langle\mathbf{n} \cdot \mathbf{l}\rangle d\mathbf{l} &= \int_{\Omega} f_{\text{ms}} \langle\mathbf{n} \cdot \mathbf{l}\rangle d\mathbf{l} \int_{\Omega} \frac{L_i(\mathbf{l}, \mathbf{p})}{\pi} \langle\mathbf{n} \cdot \mathbf{l}\rangle d\mathbf{l}
 \\
-= (1 - E_{ss}) \int_{\Omega} \frac{L_i(\mathbf{l}, \mathbf{p})}{\pi} \langle\mathbf{n} \cdot \mathbf{l}\rangle d\mathbf{l}
+&= (1 - E_{ss}) \int_{\Omega} \frac{L_i(\mathbf{l}, \mathbf{p})}{\pi} \langle\mathbf{n} \cdot \mathbf{l}\rangle d\mathbf{l}
+\end{aligned}
 $$
 
 Fdez-Agüera further notes that this approximation fails for narrow lights, such as analytical point or directional lights. Interestingly, [Stephen McAuley](http://advances.realtimerendering.com/s2019/index.htm) made the clever observation that this multiscattering term will only dominate at higher roughnesses, where our radiance map is going to be highly blurred and fairly diffuse. His comparison shows little difference, so if you weren't previously using irradiance you could potentially skip it here as well. However we've already created our irradiance map, so we will be using it again here.
@@ -696,19 +668,23 @@ $$
 L_o(\mathbf{v}, \mathbf{p}) = \left( F_0 k_a + k_b \right) \text{radiance} + \frac{(F_0 k_a + k_b)F_{\text{avg}}}{1 - F_{\text{avg}}(1 - E_{ss})} (1 - E_{ss}) \text{irradiance}
 $$
 
-Let's take a second and look at some renders of metals with this new formulation. We should no longer see the darkening as the roughness increases, and the two images below demonstrate that the term mostly succeeds:
+Let's take a second and look at some renders of metals with this new formulation. For the furnace test, _we should not be able to see the balls at all_. Below is a comparison between the single scattering BRDF and multiple scaterring BRDF inside the furnace:
 
-TODO: Renders of furnace test split in two
+![Comparison using the spheres, where for each sphere, single scattering is on the left, multiscattering is on the right](./comparison_metals.png)
 
-TODO: Renders of pisa split in two
+Sure enough, using our multiple scattering BRDF we can't see the balls at all! The approximation is perfect for constant environments like the furnace, so let's take a look at a less optimal case:
 
-One important thing to mention is that we see an increase in saturation at the higher roughnesses not unlike what [Heitz](), [Kulla and Conty](https://blog.selfshadow.com/publications/s2017-shading-course/imageworks/s2017_pbs_imageworks_slides_v2.pdf) and [Hill](https://blog.selfshadow.com/2018/06/04/multi-faceted-part-1/) see. Whether this is desired behaviour is up to you. It appears Turqin's method does _not_ produce these shifts in saturation, so that may be worth investigation for you if saturation is to be avoided at all cost.
+TODO: Metals in pisa
 
-Phew, that's a lot to take in... However, we haven't talked about how diffuse fits into this at all. Let's first examine how dielectrics behave in the furnace test:
+The improvement is considerable, as roughness does not darken the sphere at all!
 
-TODO: Render of dielectrics in furnace
+One important thing to mention is that for colored metals, you'll see an increase in saturation at the higher roughnesses not unlike what [Heitz](), [Kulla and Conty](https://blog.selfshadow.com/publications/s2017-shading-course/imageworks/s2017_pbs_imageworks_slides_v2.pdf) and [Hill](https://blog.selfshadow.com/2018/06/04/multi-faceted-part-1/) see. Whether this is desired behaviour is up to you. It appears Turqin's method does _not_ produce these shifts in saturation, so that is worth investigation if increased saturation is to be avoided.
 
-As we can see, at lower roughnesses the fresnel effect is too strong, and there is still some brightening at higher roughnesses. Luckily, we can continue with our current approach and consider a perfectly white dielectric in the furnace test:
+Phew, that's a lot to take in... However, we haven't talked about how diffuse fits into this at all. Let's first examine how dielectrics behave in the furnace test for single scattering:
+
+![Render of the dielectric spheres in furnace using single scattering BRDF](./single_scattering_furnace.png)
+
+As we can see, at lower roughnesses the fresnel effect is too strong, and there is still some brightening at higher roughnesses. Let's go back to the image from earlier and look at the bottom row this time:
 
 $$
 E = 1 = F_{ss} E_{ss} + F_{ms} E_{ms} + E_{\text{diffuse}}
@@ -732,12 +708,42 @@ L_o &= F_{ss}E_{ss} + F_{ms}E_{ms} + K_d
 \end{aligned}
 $$
 
-Let's look at our final results:
+Let's look at our final results using the same comparison as before, but with dielectrics this time:
 
-TODO: Render of dielectrics in furnace
-TODO: Render balls with split
+![Comparison of dielectric spheres, using the single scattering BRDF on the left and the multiple scattering BRDF on the right](./comparison_dielectrics.png)
 
-And here's the final shader code, using the BRDF LUT, prefitlered environment map, and irradiance map as uniform arguments:
+Interestingly, I actually get a darker result with multiple scattering than with single scattering. I'm not totally convinced that this isn't some subtle bug in my implementation of However, the significant excess energy at lower roughnesses that we observe with the single scattering BRDF is not present with our new BRDF. Here's a final render using the Pisa environment, as before, but this time with our new BRDF:
+
+```grid|2|Left: Single scattering. Right: Multiple scattering
+![Rendering of spheres of increasing roughness using our single scattering BRDF, from left to right. Top row is metal, bottom rows are dielectric.](./pisa_single_scattering_balls.png)
+![Rendering of spheres of increasing roughness using our multiple scattering BRDF, from left to right. Top row is metal, bottom rows are dielectric.](./pisa_multiscattering_balls.png)
+```
+
+#### Roughness Dependent Fresnel
+
+In the [Fdez-Aguera] paper's sample GLSL code, the author includes a modification to the Fresnel term that's used with the single scattering BRDF:
+
+```glsl
+vec3 Fr = max(vec3_splat(1.0 - roughness), F0) - F0;
+vec3 k_S = F0 + Fr * pow(1.0 - NoV, 5.0);
+// Typically, simply:
+// vec3 FssEss = F_0 * f_ab.x + f_ab.y;
+vec3 FssEss = k_S * f_ab.x + f_ab.y;
+```
+
+Unfortunately, I haven't been able to track down the origin of this modification, and it's not expanded upon in the paper. It doesn't make much difference when rendering our spheres, especially in the furnace test, but when rendering more complex objects the difference is noticable. To reason about what this term does exactly, I've made a [little desmos graph demo](https://www.desmos.com/calculator/1lvvapokgq). You can adjust the $F_0$ term to see how the modification deviates from the Schlick approximation for different levels of roughness. Interestingly, this makes the ramp starts earlier for _lower_ roughness levels. I can see this being plausible: for rougher surfaces, the proprtion of microfacets contributing to the angle dependent fresnel will decrease. At least that's the best explanation I could come up for it, but if you know the reasoning or source for this modification, please let me know!
+
+Here's a series of renders for you to compare, using the [FlightHelmet]() model. The roughness dependent fresnel displays the increase in reflections for smoother surfaces like the leather cap and wooden base.
+
+```grid|3|Left: Flight helmet rendered using single scattering BRDF. Middle: multiscattering BRDF with standed Schlick Fresnel. Right: multiscattering BRDF with roughness dependent Fresnel.
+![Flight Helmet rendered using standard single scattering BRDF](./flight_helmet_single_scattering.png)
+![Flight Helmet rendered using standard single scattering BRDF](./flight_helmet_multiscattering_standard_fresnel.png)
+![Flight Helmet rendered using standard single scattering BRDF](./flight_helmet_multiscattering_roughness_fresnel.png)
+```
+
+#### GLSL Shader Code
+
+Here's the final shader code, using the BRDF LUT, prefitlered environment map, and irradiance map as uniform arguments:
 
 ```glsl
 $input v_position, v_normal, v_tangent, v_bitangent, v_texcoord
@@ -811,8 +817,12 @@ void main()
 }
 ```
 
-Notice how little code is actually for calculating our new terms -- most of it is just texture reads and setup. Finally, to demonstrate the output with a more complicated mesh (and for a bit of continuity with the other blog posts), let's render the Flight Helmet gltf model:
+Notice how little code is actually for calculating our new terms -- most of it is just texture reads and setup that we'd need to do for direct lighting as well.
 
-TODO: Add flight helmet screenshot
+While I've included most of the shader code used, the entire example is available [here](https://github.com/bruop/bae) as `04-pbl-ibl`. Note however that it uses non-standard GLTF files, that have had their web-compatible textures swapped out with corresponding DDS files that contain mip maps, generated using the `texturec` tool provided as part of BGFX. BGFX does not provide an easy way to invoke the equivalent of `glGenerateMipmap`, so I've created a small python script to pre-process the GLTF files, located in the scripts portion of that folder.
 
-While I've included most of the shader code used, the entire example is available [here](https://github.com/bruop/bae) as `04-pbl-ibl`. Note however that it uses non-standard GLTF files, that have had their web-compatible textures swapped out with corresponding DDS files that contain mip maps, generated using the `texturec` tool provided as part of BGFX. BGFX does not provide an easy way to invoke the equivalent of `glGenerateMipmap`, so I've created a little python script to pre-process the GLTF files.
+## Future Work
+
+- The multiscattering BRDF we presented here is only presented for image based lighting. [McAuley]() goes into some detail into how we can extend it for area lights using [Heitz's]() linearly transformed cosine approach.
+- My model doesn't fully support the GLTF spec, not even close. I still need to add better support for Occlusion, Emissive, scaling factors and non-texture uniforms (`baseColor` for instance can be encoded as a single `vec4`). I'm trying to do this bit by bit while implementing other algorithms.
+- Some of my irradiance textures exhibit odd 'ringing', likely due to the uniform sampling of the hemisphere. In the end, I used the same sampling rate as [Sascha Willems]() in his PBR IBL implementation, but the problem persists with certain environment maps.
