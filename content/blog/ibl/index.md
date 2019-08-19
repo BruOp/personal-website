@@ -34,13 +34,13 @@ Where $\mathbf{v}$ is our viewing angle, $f_{\text{brdf}}(\mathbf{v}, \mathbf{l}
 
 I've omitted $\mathbf{n}$ and $\mathbf{h}$ as function arguments, but in reality they are also required to evaluate the BRDF. Here's a diagram of our different vectors:
 
-![](./hemisphere_diagram.png)
+![A diagram showing the different vectors we're using](./hemisphere_diagram.png)
 
 For our BRDF, we will take the popular approach of using a Lambertian diffuse lobe and Cook-Torrance microfacet model for our specular lobe:
 
 $$
 \begin{aligned}
-f_{\text{brdf}}(\mathbf{v}, \mathbf{l}) &= f_{\text{specular}}(\mathbf{v}, \mathbf{l}) + f_{\text{diffuse}},
+f_{\text{brdf}}(\mathbf{v}, \mathbf{l}) &= (f_{\text{specular}}(\mathbf{v}, \mathbf{l}) + f_{\text{diffuse}},
 \\\\
 f_{\text{specular}}(\mathbf{v}, \mathbf{l}) &=
     \frac{
@@ -316,12 +316,11 @@ $$
 \right)
 $$
 
-Karis doesn't provide any mathematic justification for the additional summation in the denominator, or why we sould evaluate $L_i$ by importance sampling GGX,
+Karis doesn't provide any mathematic justification for the additional summation in the denominator, or why we should evaluate $L_i$ by importance sampling GGX, but as TODO
 
 However, one big problem with this is that the GGX NDF is dependent on $\mathbf{v}$ -- which creates "stretchy" reflections. Karis approximates the NDF as _isotropic_ where $\mathbf{n} = \mathbf{v}$. This is a much larger source of error than the split sum, and is demonstrated by the figure below:
 
-![Left: Reflections produced by Isotropic approximation. Right: Reference with standard GGX NDF.](./isotropic_error.png)
-_Left: Reflections produced by Isotropic approximation. Right: Reference with standard GGX NDF._
+![Comparison showing the error of our isotropic assumption](./isotropic_error.png "Left: Reflections produced by Isotropic approximation. Right: Reference with standard GGX NDF.")
 
 Notice the anisotropic reflections on the right that we lose with the approximation. Taken from the [_Moving Frostbite to PBR_ course notes](https://seblagarde.files.wordpress.com/2015/07/course_notes_moving_frostbite_to_pbr_v32.pdf). While the error is large, it's the price we must pay to be able to perform this sum outside of our render loop when $\mathbf{v}$ is known.
 
@@ -432,7 +431,9 @@ void main()
 
 I also wrote a [small ShaderToy example](https://www.shadertoy.com/view/WtBSRR) that lets you visualize this for different levels of roughness. The mouse allows you to change the roughness amount. Let's take a look at the resulting output for the [Pisa environment map](http://gl.ict.usc.edu/Data/HighResProbes/):
 
-![Environment map in linear space for different roughness levels. Note that the size of the mips has been scaled to match the original image size. Also note the banding is due to GIF enconding.](./pisa_radiance.gif)
+![Environment map in linear space for different roughness levels.](./pisa_radiance.gif)
+
+Note that this is in linear space and will appear darker than it would in a rendered that properly handles HDR and gamma. The size of the mips has been scaled to match the original image size. Also note the banding is due to GIF encoding, and you shouldn't see anything like that in your output.
 
 ### Environment BRDF
 
@@ -575,7 +576,7 @@ void main()
 
 This shader is a bit simpler than the last, since we don't have to write to a cube map this time. I also wrote a [ShaderToy](https://www.shadertoy.com/view/3lXXDB) for this example as well, which shows you what the output looks like. Note that these outputs will be in RGBA8, so probably aren't suitable for direct use (i.e. you can't use the screen cap as an LUT). The two values smoothly vary and as such we can get away with a fairly small LUT. In my BGFX code I store it in 64x64 texture.
 
-![A high resolution version of the LUT captured from the ShaderToy linked above.](./brdf_lut.png)
+![A high resolution version of the LUT captured from the ShaderToy linked above.](./brdf_lut.png "A high resolution version of the LUT captured from the ShaderToy linked above. The red channel is the scaling factor, and the green channel is the bias (f_a and f_b, respectively)")
 
 ## Single Scattering Results
 
@@ -660,17 +661,16 @@ You might notice that both the value for `F0` and for `diffuseColor` are derived
 
 So let's take a look at the results! Here's a render of spheres of increasing roughness (from left to right) that uses the [Pisa courtyard environment map](http://gl.ict.usc.edu/Data/HighResProbes/):
 
-![Rendering of spheres of increasing roughness, from left to right. Top row is metal, bottom row is dielectric.](./pisa_single_scattering_balls.png)
-_Rendering of spheres of increasing roughness, from left to right. Top row is metal, bottom row is dielectric._
+![Rendering of spheres of increasing roughness](./pisa_single_scattering_balls.png "Rendering of spheres of increasing roughness, from left to right. Top row is metal, bottom row is dielectric.")
 
 We can see how as the roughness increases, we're using our blurrier prefiltered environment maps. However, you may also be able to notice that as roughness increases, the metal spheres become darker. One way we can demonstrate this fully is to render the spheres in a totally white environment, where $L_i(\mathbf{l}) = 1$ for all directions $\mathbf{l}$. This is also commonly referred to as a "furnace test":
 
-![Rendering the spheres inside an environment with constant incident radiance](./single_scattering_furnace.png)
-_Rendering the spheres inside an environment with constant $L_i = 0.5$_
+![Rendering the spheres inside an environment with constant incident radiance](./single_scattering_furnace.png "Rendering the spheres inside an environment with constant L_i = 0.5")
 
-Here's it's very obvious that something is amiss. Physically, there's no reason why our metal would become this much darker even as roughness increases. The reason this is occurring within our model is that we are using a first order approximation which includes only the single scattering events. In reality, light will scatter several times across the surface, as demonstrated in this diagram from [Heitz et al, 2015](https://eheitzresearch.wordpress.com/240-2/):
 
-![Diagram illustrating multiple scattering events, from Heitz et al. 2015](./multiple_scattering_diagram.png)
+Here's it's very obvious that something is amiss. Physically, TODO: rework there's no reason why our metal would become this much darker even as roughness increases. The reason this is occurring within our model is that we are using a first order approximation which includes only the single scattering events. In reality, light will scatter several times across the surface, as demonstrated in this diagram from [Heitz et al, 2015](https://eheitzresearch.wordpress.com/240-2/):
+
+![Diagram illustrating multiple scattering events, from Heitz et al. 2015](./multiple_scattering_diagram.png "Diagram illustrating multiple scattering events, from Heitz et al. 2015")
 
 As the material becomes rougher, the multiscattering events account for a larger proportion of the reflected energy, and our approximation break down.
 
@@ -762,13 +762,11 @@ $$
 
 Let's take a second and look at some renders of metals with this new formulation. For the furnace test, _we should not be able to see the balls at all_. Below is a comparison between the single scattering BRDF and multiple scaterring BRDF inside the furnace:
 
-![Comparison using the spheres, where for each sphere, single scattering is on the left, multiscattering is on the right](./comparison_metals.png)
-_Comparison using the spheres, where for each sphere, single scattering is on the left, multiscattering is on the right_
+![Comparison using the spheres in our furnace](./comparison_metals.png "Comparison using the spheres, where for each sphere, single scattering is on the left, multiscattering is on the right")
 
 Sure enough, using our multiple scattering BRDF we can't see the balls at all! The approximation is perfect for constant environments like the furnace, so let's take a look at a less optimal case:
 
-![Render of our metal spheres using the Pisa environment map](./pisa_multiscattering_metals.png)
-_Render of our metal spheres using the Pisa environment map_
+![Render of our metal spheres using the Pisa environment map](./pisa_multiscattering_metals.png "Render of our metal spheres using the Pisa environment map")
 
 The improvement is considerable, as roughness does not darken the sphere at all!
 
@@ -778,7 +776,7 @@ One important thing to mention is that for colored metals, you'll see an increas
 
 So far, we haven't talked about how diffuse fits into this at all. Let's first examine how dielectrics behave in the furnace test for single scattering:
 
-![Render of the dielectric spheres in furnace using single scattering BRDF](./single_scattering_furnace.png)
+![Render of the dielectric spheres in furnace using single scattering BRDF](./single_scattering_furnace.png "Render of the dielectric spheres in furnace using single scattering BRDF")
 
 As we can see, at lower roughnesses the fresnel effect is too strong, and there is still some brightening at higher roughnesses. Let's go back to the image from earlier and look at the bottom row this time:
 
@@ -806,9 +804,9 @@ $$
 
 Let's look at our final results using the same comparison as before, but with dielectrics this time:
 
-![Comparison of dielectric spheres, using the single scattering BRDF on the left and the multiple scattering BRDF on the right](./comparison_dielectrics.png)
+![Comparison of our BRDF using dielectric spheres](./comparison_dielectrics.png "Comparison using dielectric spheres, with the single scattering BRDF in use on the left and the multiple scattering BRDF on the right")
 
-Interestingly, I actually get a darker result with multiple scattering than with single scattering. I'm not totally convinced that this isn't some subtle bug in my implementation of However, the significant excess energy at lower roughnesses that we observe with the single scattering BRDF is not present with our new BRDF. Here's a final render using the Pisa environment, as before, but this time with our new BRDF:
+Interestingly, I actually get a darker result with multiple scattering than with single scattering. I'm not totally convinced that this isn't some subtle bug in my implementation of TODO However, the significant excess energy at lower roughnesses that we observe with the single scattering BRDF is not present with our new BRDF. Here's a final render using the Pisa environment, as before, but this time with our new BRDF:
 
 ```grid|2|Left: Single scattering. Right: Multiple scattering
 ![Rendering of spheres of increasing roughness using our single scattering BRDF, from left to right. Top row is metal, bottom rows are dielectric.](./pisa_single_scattering_balls.png)
