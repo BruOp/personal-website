@@ -1,6 +1,6 @@
 ---
-title: Image Based Lighting
-date: "2019-08-10T15:00:00Z"
+title: Image Based Lighting with Multiple Scattering
+date: "2019-08-19T15:00:00Z"
 description: A guide to adding image based lighting that uses a multi-scattering
 ---
 
@@ -316,13 +316,13 @@ $$
 \right)
 $$
 
-Karis doesn't provide any mathematic justification for the additional summation in the denominator, or why we should evaluate $L_i$ by importance sampling GGX, but as TODO
+Karis doesn't provide any mathematic justification for the additional summation in the denominator, or why we should evaluate $L_i$ by importance sampling GGX, but as [noted by Sebastian Legarde](https://seblagarde.files.wordpress.com/2015/07/course_notes_moving_frostbite_to_pbr_v32.pdf) (pg. 64) these empirical terms seem to provde the best correction for our split sum approximation for a constant $L_i$.
 
-However, one big problem with this is that the GGX NDF is dependent on $\mathbf{v}$ -- which creates "stretchy" reflections. Karis approximates the NDF as _isotropic_ where $\mathbf{n} = \mathbf{v}$. This is a much larger source of error than the split sum, and is demonstrated by the figure below:
+However, one big problem with this is that the GGX NDF is dependent on $\mathbf{v}$ -- which creates "stretchy" reflections. Karis approximates the NDF as _isotropic_ where $\mathbf{n} = \mathbf{v}$. This is a much larger source of error than the split sum, and is demonstrated by the figure below, which was taken from the previously mentioned [_Moving Frostbite to PBR_ course notes](https://seblagarde.files.wordpress.com/2015/07/course_notes_moving_frostbite_to_pbr_v32.pdf):
 
 ![Comparison showing the error of our isotropic assumption](./isotropic_error.png "Left: Reflections produced by Isotropic approximation. Right: Reference with standard GGX NDF.")
 
-Notice the anisotropic reflections on the right that we lose with the approximation. Taken from the [_Moving Frostbite to PBR_ course notes](https://seblagarde.files.wordpress.com/2015/07/course_notes_moving_frostbite_to_pbr_v32.pdf). While the error is large, it's the price we must pay to be able to perform this sum outside of our render loop when $\mathbf{v}$ is known.
+Notice the anisotropic reflections on the right that we lose with the approximation. . While the error is large, it's the price we must pay to be able to perform this sum outside of our render loop when $\mathbf{v}$ is known.
 
 When it comes to storing the pre-filtered environment map, it's important to note once again that we're creating a different map for different roughness levels of our choosing. Since we'll lose high frequency information as roughness increases, we can actually use mip map layers to store the filtered map, with higher roughnesses corresponding to higher mip levels.
 
@@ -667,12 +667,11 @@ We can see how as the roughness increases, we're using our blurrier prefiltered 
 
 ![Rendering the spheres inside an environment with constant incident radiance](./single_scattering_furnace.png "Rendering the spheres inside an environment with constant L_i = 0.5")
 
-
-Here's it's very obvious that something is amiss. Physically, TODO: rework there's no reason why our metal would become this much darker even as roughness increases. The reason this is occurring within our model is that we are using a first order approximation which includes only the single scattering events. In reality, light will scatter several times across the surface, as demonstrated in this diagram from [Heitz et al, 2015](https://eheitzresearch.wordpress.com/240-2/):
+Here the darkening is much more pronounced. About 40% of the energy is being lost, but since our spheres have a "white" albedo, this is violating conservation of energy. Recall that our model is simply a first order approximation which includes only the single scattering events. In reality, light will scatter several times across the surface, as this diagram from [Heitz et al, 2015](https://eheitzresearch.wordpress.com/240-2/) illustrates:
 
 ![Diagram illustrating multiple scattering events, from Heitz et al. 2015](./multiple_scattering_diagram.png "Diagram illustrating multiple scattering events, from Heitz et al. 2015")
 
-As the material becomes rougher, the multiscattering events account for a larger proportion of the reflected energy, and our approximation break down.
+As the material becomes rougher, the multiscattering events account for a larger proportion of the reflected energy, and our approximation break down. So we need some way of recovering this lost energy if we want to have more plausible results.
 
 ## Accounting for Multiple-Scattering
 
@@ -806,7 +805,7 @@ Let's look at our final results using the same comparison as before, but with di
 
 ![Comparison of our BRDF using dielectric spheres](./comparison_dielectrics.png "Comparison using dielectric spheres, with the single scattering BRDF in use on the left and the multiple scattering BRDF on the right")
 
-Interestingly, I actually get a darker result with multiple scattering than with single scattering. I'm not totally convinced that this isn't some subtle bug in my implementation of TODO However, the significant excess energy at lower roughnesses that we observe with the single scattering BRDF is not present with our new BRDF. Here's a final render using the Pisa environment, as before, but this time with our new BRDF:
+Interestingly, I actually get a darker result with multiple scattering than with single scattering. I'm not totally convinced that this isn't some subtle bug in my implementation of the dielectric part of my BRDF. However, the significant excess energy at lower roughnesses that we observe with the single scattering BRDF is not present with our new BRDF. Here's a final render using the Pisa environment, as before, but this time with our new BRDF:
 
 ```grid|2|Left: Single scattering. Right: Multiple scattering
 ![Rendering of spheres of increasing roughness using our single scattering BRDF, from left to right. Top row is metal, bottom rows are dielectric.](./pisa_single_scattering_balls.png)
@@ -834,6 +833,8 @@ Here's a series of renders for you to compare, using the [FlightHelmet](https://
 ![Flight Helmet rendered using standard single scattering BRDF](./flight_helmet_multiscattering_standard_fresnel.png)
 ![Flight Helmet rendered using standard single scattering BRDF](./flight_helmet_multiscattering_roughness_fresnel.png)
 ```
+
+You can also see the brightening of the metal goggles and base's plaque, but otherwise this model is mostly composed of dielectric materials.
 
 #### GLSL Shader Code
 
