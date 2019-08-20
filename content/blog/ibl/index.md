@@ -6,9 +6,9 @@ description: A guide to adding image based lighting that uses a multi-scattering
 
 ## Introduction and Background
 
-Recently I decided to implement image based lighting in BGFX, since I had never implemented image based lighting before and it's a great way to get assets authored for PBR looking really great. As I started reading I realized that there was a lot of work done on this in the past few years built upon bit by bit, and that it might be useful to others to have a reference for implementation from start to finish. I've document the steps involved in implementation, starting with some background, then [Karis's 2014 paper](https://cdn2.unrealengine.com/Resources/files/2013SiggraphPresentationsNotes-26915738.pdf) explaining Unreal's IBL implementation, and then new approaches from [Fdez-Agüera](http://www.jcgt.org/published/0008/01/03/paper.pdf) and others to address the error present in existing models.
+Recently I decided to implement image based lighting in BGFX, since I had never done so before and it's a great way to produce realistic renders with assets authored for PBR. As I started reading I realized that approaches had gotten a lot more involved than they had been even 10 years ago, and that it might be useful to others to have a reference for implementation from start to finish. I've documented the steps involved in implementation, starting with some background, then moving onto [Karis's 2014 paper](https://cdn2.unrealengine.com/Resources/files/2013SiggraphPresentationsNotes-26915738.pdf) explaining Unreal's IBL implementation, and then finally new approaches from [Fdez-Agüera](http://www.jcgt.org/published/0008/01/03/paper.pdf) and others to address the error present in existing models.
 
-Let's start by defining the equation which provides the outgoing light from a point $\mathbf{p}$ in the viewing direction $\mathbf{v}$:
+Let's start by defining the equation which defines the outgoing radiance from a point $\mathbf{p}$ in the viewing direction $\mathbf{v}$:
 
 $$
 L_o(\mathbf{v}) = \int_{\Omega} f_{\text{brdf}}(\mathbf{v}, \mathbf{l}) L_i(\mathbf{l}) \langle\mathbf{n} \cdot \mathbf{l}\rangle d\mathbf{l}
@@ -41,7 +41,7 @@ Where $D$ is our normal distribution function (NDF), which tells us what proport
 
 For more detail on this model, there are many resources but [Naty Hoffman's talk](https://blog.selfshadow.com/publications/s2013-shading-course/hoffman/s2013_pbs_physics_math_slides.pdf) from this [2013 Siggraph workshop](https://blog.selfshadow.com/publications/s2013-shading-course/) is very helpful in explaining this BRDF if you've never seen it before. I'll also go ahead and define our functions explicitly, to dispell any ambiguity as to which variation we're using here.
 
-One extremely important detail is that the $f_\text{specular}$ lobe only accounts for a single scattering of energy. In reality, rougher surfaces will produce multiple scattering events. This is especially important metals, where reflection dominates. We will see the consequences of only including a single scattering event in our BRDF model later.
+One extremely important detail is that the $f_\text{specular}$ lobe only accounts for a single scattering of energy. In reality, rougher surfaces will produce multiple scattering events. This is especially important for metals, where reflection dominates. We will see the consequences of only including a single scattering event in our BRDF model later.
 
 For our NDF $D$, we're using the [GGX lobe](https://cdn2.unrealengine.com/Resources/files/2013SiggraphPresentationsNotes-26915738.pdf):
 
@@ -74,7 +74,7 @@ V(\mathbf{v}, \mathbf{l}) &= \frac{0.5}{
 \end{aligned}
 $$
 
-Notice we've expressed this in a way that incorporates the denominator of the BRDF into our $V$ term. For more detail on this term, I've found [this section](https://google.github.io/filament/Filament.html#materialsystem/specularbrdf) of the Filament documentation to be helpful.
+Note that we've expressed this in a way that incorporates the denominator of the BRDF into our $V$ term. For more detail on this term, I've found [this section](https://google.github.io/filament/Filament.html#materialsystem/specularbrdf) of the Filament documentation to be helpful.
 
 Finally, our Fresnel term will use the Schlick approximation:
 
@@ -88,13 +88,13 @@ $$
 Where $F_0$ is a material property representing the specular reflectance at incident angles ($\mathbf{l} = \mathbf{n}$). The second form will come in handy later. For dielectrics, this is taken to be a uniform 4% as per the [GLTF spec](https://github.com/KhronosGroup/glTF/blob/master/specification/2.0/README.md#materials), while for metals we can use the albedo channel in the texture:
 
 ```glsl
+const float DIELECTRIC_SPECULAR = 0.04;
 F_0 = lerp(vec3(DIELECTRIC_SPECULAR), albedo.rgb, metalness);
 ```
 
 For the constant diffuse term $f_{\text{diffuse}}$, we'll be using the [GLTF spec](https://github.com/KhronosGroup/glTF/blob/master/specification/2.0/README.md#materials) for determining $c_{\text{diff}}$, which allows for a single albedo texture used by both metals and dielectrics:
 
 ```glsl
-const float DIELECTRIC_SPECULAR = 0.04;
 diffuseColor = albedo.rgb * (1 - DIELECTRIC_SPECULAR) * (1.0 - metalness)
 ```
 
@@ -109,13 +109,13 @@ We'll be focused on item 2 in this post. While an environment map can provide mu
 
 - With a typical microfacet model we have both specular and diffuse lobes.
 - The Lambertian lobe is dependent on light incoming from every part of our hemisphere. We must sample as much of the hemisphere as possible.
-- Sampling the hemisphere naively, we'll need potentially hundreds/thousands of texture reads.
+- Sampling the hemisphere naively, we'll need potentially thousands of texture reads.
 - For the specular lobe, our roughness will determine what parts of the hemisphere are most important. Other parts will not be as important and will not help us converge on a solution.
 - Additionally, each sample will require evaluation of the BRDF, which for the specular component, is not "cheap".
 
-Doing all this work with every mesh is not going to cut it for anything but the simplest of scenes. Additionally, sometimes we'll be redoing work -- for instance, calculating the diffuse irradiance for each direction really only needs to happen once for each environment map!
+Performing all of this work with every mesh isn't feasible for anything but the simplest of scenes. Additionally, sometimes we'll be redoing work -- for instance, calculating the diffuse irradiance for each direction really only needs to happen once for each environment map!
 
-So instead of doing all that in every frame, we're going to try to pre-compute as many parts of the integral as possible. In order to do so, we'll need to identify what we can precalculate and have to make some approximations!
+Instead, we're going to try to pre-compute as many parts of the integral as possible. In order to do so, we'll need to identify what we can precalculate and have to make some approximations.
 
 ## Lambertian Diffuse Component
 
@@ -130,9 +130,9 @@ L_{\text{diffuse}}(\mathbf{v})
 \end{aligned}
 $$
 
-Since our integral is not dependent on any material properties or view direction, and instead dependent only on $\mathbf{n}$, we can solve this integral for every direction $\mathbf{n}$ and store the results in a cube map, allowing us to look up the irradiance for any normal direction later. Note that since we're not using an NDF or anything like that, we can get away with simply uniformly sampling our hemisphere. Then we just multiply it by $c_{\text{diff}}$ later on and we're done!
+Since our integral is not dependent on any material properties or view direction, and instead dependent only on $\mathbf{n}$, we can solve this integral for every direction $\mathbf{n}$ and store the results in a cube map, allowing us to later look up the irradiance for any normal direction. Note that since we're not using an NDF, we can get away with simple uniform sampling of our hemisphere.
 
-In BGFX, I implemented this using compute shaders, using thread groups with a third dimension corresponding to a face of the cube. I'm not certain this is actually a good idea as it result in poor coherency, but I didn't have time to benchmark against just dispatching a different job for each face. This is left as an exercise for the reader.
+In BGFX, I implemented this using compute shaders, using thread groups with a third dimension corresponding to the faces of the cube. I'm not certain this is actually a good idea as it may result in poor coherency, but I didn't have time to benchmark against seperate dispatches for each face. This is left as an exercise for the reader.
 
 Here's the shader code used to generate a 64x64 irradiance map inside of a compute shader:
 
@@ -174,11 +174,11 @@ void main()
 }
 ```
 
-Note that you may not need a such a small step size. In fact, depending on the size of your environment map, you may be wasting your time a bit. I was struggling with ringing artifacts with certain environment maps, so I opted to use 1 sampler/degree which seemed to help. Since the operation is done once per environment map, offline, I didn't want to spend too much time tweaking performance.
+Note that you may not need a such a small step size. I was struggling with ringing artifacts with certain environment maps, so I opted to use a smaller delta which helped. Since the operation is done outside the render loop and only once per environment map, I didn't want to spend too much time tweaking performance.
 
 ## Importance Sampling
 
-In order to integrate our radiance equation, we'll need to numerically integrate across our hemisphere. Using the Monte Carlo with importance sampling will provide the following equation:
+In order to integrate the specular part of our radiance equation, we'll need to use importance sampling, using the following equation:
 
 $$
 \int_{\Omega} f_{\text{brdf}}(\mathbf{v}, \mathbf{l}) L_i(\mathbf{l}) \langle\mathbf{n} \cdot \mathbf{l}\rangle d\mathbf{l}
@@ -186,11 +186,11 @@ $$
 \frac{1}{N} \sum_{k=1}^{N} \frac{f_{\text{brdf}}(\mathbf{v}, \mathbf{l}_k) L_i(\mathbf{l}_k) \langle\mathbf{n} \cdot \mathbf{l}_k\rangle}{\text{pdf}(\mathbf{v}, \mathbf{l}_k)}
 $$
 
-Where $\text{pdf}(\mathbf{v}, \mathbf{l}_k)$ is the probability distribution function we use for sampling our hemisphere. Intuitively, the idea behind having the PDF in the denominator is that if a direction is more likely to be sampled than others, it should contribute less to the sum than a direction that is incredibly unlikely to be chosen.
+Where $\text{pdf}(\mathbf{v}, \mathbf{l}_k)$ is the probability distribution function we use for sampling our hemisphere. Intuitively, the idea behind having the PDF in the denominator is that if a direction is more likely to be sampled than others, it should contribute less to the sum than a direction that is very unlikely to be sampled.
 
 We could naively sample our hemisphere randomly, but at low roughness our specular component will converge to the actual solution very slowly. The same is true if we attempt to sample our hemisphere uniformly. To reason about this, consider a roughness close to zero, which corresponds to a perfect reflector. In this case, the only light direction that matters is the direction of perfect reflection $\mathbf{l}_{\text{reflection}}$ from $\mathbf{v}$ based on $\mathbf{n}$. _Every other direction will contribute nothing to our sum_. And if we do manage to sample $\mathbf{l}_{\text{reflection}}$, we still won't converge due to the $\frac{1}{N}$ term. At hight roughness, this is less of a factor as the distribution of our microfacet normals will increase, and we'll have to consider most parts of our hemisphere.
 
-So instead, we'll choose a PDF that resembles our BRDF in order to decrease the variance. We'll actually choose our Normal Distribution Function $D$ as our PDF, the reasoning being that the NDF determines which directions contribute the most to the light leaving our larger surface patch. More correctly, we'll actually be sampling $D(\mathbf{h})\langle \mathbf{n} \cdot \mathbf{h} \rangle$, since [this is how the normal distribution is actually defined](http://www.reedbeta.com/blog/hows-the-ndf-really-defined/):
+Instead, we'll choose a PDF that resembles our BRDF in order to decrease the variance. We can use our Normal Distribution Function $D$ as our PDF, the reasoning being that the NDF determines which directions contribute the most to the light leaving our larger surface patch. More correctly, we'll actually be sampling $D(\mathbf{h})\langle \mathbf{n} \cdot \mathbf{h} \rangle$, since [this is how the normal distribution is actually defined](http://www.reedbeta.com/blog/hows-the-ndf-really-defined/):
 
 $$
 \int_\Omega D(\mathbf{h}) \langle \mathbf{n} \cdot \mathbf{h} \rangle d\mathbf{l}s = 1
@@ -219,7 +219,7 @@ $$
 \end{aligned}
 $$
 
-Note that this assumes we're restricting ourselves to an isotropic version of the GGX, which is why the $\phi$ term is just randomly sampled. Note the $\alpha$ term in our equation for $\phi$, but it may not be obvious how this dependency causes the equation to behave. I created a [little Desmos demo](https://www.desmos.com/calculator/ueuitucusv) that you can play around with to get a sense of how this maps our $\xi_2$ to $\theta$. Notice that at low roughnesses, most of the $[0, 1)$ range will map to a small $\theta$, while at larger roughnesses we approach a standard cosine distribution, and we're much more likely to get directions "further" from $\mathbf{n}$.
+Note that this assumes we're restricting ourselves to an isotropic version of the GGX, which is why the $\phi$ term is just randomly sampled. You may also notice the $\alpha$ term in our equation for $\theta$, but it may not be obvious how this dependency causes the equation to behave. I created a [little Desmos demo](https://www.desmos.com/calculator/ueuitucusv) that you can play around with to get a sense of how this maps our $\xi_2$ to $\theta$. Observe that at low roughness, most of the $[0, 1)$ range will map to a small $\theta$, while for greater roughness we approach a standard cosine distribution, and we're much more likely to get directions "further" from $\mathbf{n}$.
 
 Okay so, we now have a method of importance sampling for the entire range of roughness values. Here's some GLSL code that shows how we could sample a quasi-random direction $\mathbf{l_k}$:
 
