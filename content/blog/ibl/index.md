@@ -346,7 +346,7 @@ for (float mipLevel = 0; mipLevel <= maxMipLevel; ++mipLevel)
 }
 ```
 
-Then our computer shader looks like the following:
+Then our compute shader looks like the following:
 
 ```glsl
 #define THREADS 8
@@ -452,21 +452,18 @@ Let's take a look at it with our specular BRDF and the $\text{pdf}$ subbed in:
 
 $$
 \frac{1}{N} \sum_{k=1}^{N}
+    D(\mathbf{h}) F(\mathbf{v}\cdot\mathbf{h}) V(\mathbf{v},\mathbf{l},\mathbf{h})
     \frac{
-        D(\mathbf{h}) F(\mathbf{v}\cdot\mathbf{h}) G(\mathbf{v},\mathbf{l},\mathbf{h})
-    }{
-        4 \langle\mathbf{n}\cdot\mathbf{l_k}\rangle \langle\mathbf{n}\cdot\mathbf{v}\rangle
-    }
-    \frac{4 \langle \mathbf{v} \cdot \mathbf{h} \rangle
+        4 \langle \mathbf{v} \cdot \mathbf{h} \rangle
     }{
         D(\mathbf{h}) \langle \mathbf{n} \cdot \mathbf{h} \rangle
     }  \langle\mathbf{n} \cdot \mathbf{l}_k\rangle
-= \frac{1}{N} \sum_{k=1}^{N}
+= \frac{4}{N} \sum_{k=1}^{N}
     F(\mathbf{v}\cdot\mathbf{h})
     \frac{
-        G(\mathbf{v},\mathbf{l},\mathbf{h}) \langle \mathbf{v} \cdot \mathbf{h} \rangle
+        V(\mathbf{v},\mathbf{l},\mathbf{h}) \langle \mathbf{v} \cdot \mathbf{h} \rangle \langle\mathbf{n} \cdot \mathbf{l}_k\rangle
     }{
-        \langle\mathbf{n}\cdot\mathbf{v}\rangle \langle \mathbf{n} \cdot \mathbf{h} \rangle
+        \langle \mathbf{n} \cdot \mathbf{h} \rangle
     }
 $$
 
@@ -476,26 +473,26 @@ $$
 \begin{aligned}
 = &\frac{1}{N} \sum_{k=1}^{N}
     \frac{
-        G(\mathbf{v},\mathbf{l}_k,\mathbf{h}) \langle \mathbf{v} \cdot \mathbf{h} \rangle
+        V(\mathbf{v},\mathbf{l},\mathbf{h}) \langle \mathbf{v} \cdot \mathbf{h} \rangle \langle\mathbf{n} \cdot \mathbf{l}_k\rangle
     }{
-        \langle\mathbf{n}\cdot\mathbf{v}\rangle \langle \mathbf{n} \cdot \mathbf{h} \rangle
+        \langle \mathbf{n} \cdot \mathbf{h} \rangle
     }
-    F_0(1 - (1 - \langle \mathbf{v} \cdot \mathbf{h} \rangle)^5) + (1 - \langle \mathbf{v} \cdot \mathbf{h} \rangle)^5
-\\= &F_0 \left(\frac{1}{N} \sum_{k=1}^{N}
+    \Big(F_0(1 - (1 - \langle \mathbf{v} \cdot \mathbf{h} \rangle)^5) + (1 - \langle \mathbf{v} \cdot \mathbf{h} \rangle)^5\Big)
+\\= &F_0 \left(\frac{4}{N} \sum_{k=1}^{N}
     \frac{
-        G(\mathbf{v},\mathbf{l}_k,\mathbf{h}) \langle \mathbf{v} \cdot \mathbf{h} \rangle
+        V(\mathbf{v},\mathbf{l},\mathbf{h}) \langle \mathbf{v} \cdot \mathbf{h} \rangle \langle\mathbf{n} \cdot \mathbf{l}_k\rangle
     }{
-        \langle\mathbf{n}\cdot\mathbf{v}\rangle \langle \mathbf{n} \cdot \mathbf{h} \rangle
+        \langle \mathbf{n} \cdot \mathbf{h} \rangle
     }
     (1 - (1 - \langle \mathbf{v} \cdot \mathbf{h} \rangle)^5)
 \right)
 \\
 & + \left(
-        \frac{1}{N} \sum_{k=1}^{N}
+        \frac{4}{N} \sum_{k=1}^{N}
         \frac{
-            G(\mathbf{v},\mathbf{l}_k,\mathbf{h}) \langle \mathbf{v} \cdot \mathbf{h} \rangle
+        V(\mathbf{v},\mathbf{l},\mathbf{h}) \langle \mathbf{v} \cdot \mathbf{h} \rangle \langle\mathbf{n} \cdot \mathbf{l}_k\rangle
         }{
-            \langle\mathbf{n}\cdot\mathbf{v}\rangle \langle \mathbf{n} \cdot \mathbf{h} \rangle
+            \langle \mathbf{n} \cdot \mathbf{h} \rangle
         }
         (1 - \langle \mathbf{v} \cdot \mathbf{h} \rangle)^5 \right)
 \\
@@ -516,8 +513,17 @@ I used a compute shader that just gets run once and the resulting LUT is stored 
 
 IMAGE2D_WR(s_target, rg16f, 0);
 
+// From the filament docs. Geometric Shadowing function
+// https://google.github.io/filament/Filament.html#toc4.4.2
+float V_SmithGGXCorrelated(float NoV, float NoL, float roughness) {
+    float a2 = pow(roughness, 4.0);
+    float GGXV = NoL * sqrt(NoV * NoV * (1.0 - a2) + a2);
+    float GGXL = NoV * sqrt(NoL * NoL * (1.0 - a2) + a2);
+    return 0.5 / (GGXV + GGXL);
+}
+
 // Karis 2014
-vec2 integrateBRDF(float linearRoughness, float NoV)
+vec2 integrateBRDF(float roughness, float NoV)
 {
 	vec3 V;
     V.x = sqrt(1.0 - NoV * NoV); // sin
@@ -534,7 +540,7 @@ vec2 integrateBRDF(float linearRoughness, float NoV)
     for (uint i = 0u; i < numSamples; i++) {
         vec2 Xi = hammersley(i, numSamples);
         // Sample microfacet direction
-        vec3 H = importanceSampleGGX(Xi, linearRoughness, N);
+        vec3 H = importanceSampleGGX(Xi, roughness, N);
 
         // Get the light direction
         vec3 L = 2.0 * dot(V, H) * H - V;
@@ -544,15 +550,15 @@ vec2 integrateBRDF(float linearRoughness, float NoV)
         float VoH = saturate(dot(V, H));
 
         if (NoL > 0.0) {
-            float G = G_Smith(NoV, NoL, linearRoughness);
-            float G_Vis = G * VoH / (NoH * NoV);
+            // Terms besides V are from the GGX PDF we're dividing by
+            float V_pdf = V_SmithGGXCorrelated(NoV, NoL, roughness) * VoH * NoL / NoH;
             float Fc = pow(1.0 - VoH, 5.0);
-            A += (1.0 - Fc) * G_Vis;
-            B += Fc * G_Vis;
+            A += (1.0 - Fc) * V_pdf;
+            B += Fc * V_pdf;
         }
     }
 
-    return vec2(A, B) / float(numSamples);
+    return 4.0 * vec2(A, B) / float(numSamples);
 }
 
 
@@ -574,7 +580,7 @@ void main()
 
 ```
 
-This shader is a bit simpler than the last, since we don't have to write to a cube map this time. I also wrote a [ShaderToy](https://www.shadertoy.com/view/3lXXDB) for this example as well, which shows you what the output looks like. Note that these outputs will be in RGBA8, so probably aren't suitable for direct use (i.e. you can't use the screen cap as an LUT). The two values smoothly vary and as such we can get away with a fairly small LUT. In my BGFX code I store it in 64x64 texture.
+This shader is a bit simpler than the last, since we don't have to write to a cube map this time. I also wrote a [ShaderToy](https://www.shadertoy.com/view/3lXXDB) for this example as well, which shows you what the output looks like. Note that these outputs will be in RGBA8, so probably aren't suitable for direct use (i.e. you can't use the screen cap as an LUT). The two values smoothly vary and as such we can get away with a fairly small LUT. In my BGFX code I store it in 128x128 texture.
 
 ![A high resolution version of the LUT captured from the ShaderToy linked above.](./brdf_lut.png "A high resolution version of the LUT captured from the ShaderToy linked above. The red channel is the scaling factor, and the green channel is the bias (f_a and f_b, respectively)")
 
@@ -588,7 +594,7 @@ $$
 \left( F_0 f_a + f_b \right) \text{radiance} + \frac{c_{\text{diff}}}{\pi} \text{irradiance}
 $$
 
-Where $f_a, f_b$ are the values stored in our lookup table, $\text{radiance}$ is the prefiltered environment map, \text{irradiance} is the irradiance map, $F_0$ and $c_{\text{diff}}$ are material properties for Specular color and diffuse color respectively. Here's the fragment shader code as well:
+Where $f_a, f_b$ are the values stored in our lookup table, $\text{radiance}$ is the prefiltered environment map, $\text{irradiance}$ is the irradiance map, $F_0$ and $c_{\text{diff}}$ are material properties for specular color and diffuse color respectively. Here's the fragment shader code as well:
 
 ```glsl
 $input v_position, v_normal, v_tangent, v_bitangent, v_texcoord
@@ -597,7 +603,6 @@ $input v_position, v_normal, v_tangent, v_bitangent, v_texcoord
 #include "pbr_helpers.sh"
 
 #define DIELECTRIC_SPECULAR 0.04
-#define BLACK vec3(0.0, 0.0, 0.0)
 
 // Scene
 uniform vec4 u_envParams;
@@ -628,33 +633,28 @@ void main()
     vec3 viewDir = normalize(u_cameraPos.xyz - v_position);
     vec3 lightDir = reflect(-viewDir, normal);
     vec3 H = normalize(lightDir + viewDir);
+    float VoH = clampDot(viewDir, H);
     float NoV = clamp(dot(normal, viewDir), 1e-5, 1.0);
 
-    // Material properties
     vec4 baseColor = texture2D(s_diffuseMap, v_texcoord);
     vec3 OccRoughMetal = texture2D(s_metallicRoughnessMap, v_texcoord).xyz;
-    float occlusion = OccRoughMetal.x;
-    float roughness = OccRoughMetal.y;
+    float roughness = max(OccRoughMetal.y, MIN_ROUGHNESS);
     float metalness = OccRoughMetal.z;
-    // According to GLTF spec
-    vec3 F0 = mix(vec3_splat(DIELECTRIC_SPECULAR), baseColor.xyz, metalness);
-    float diffuseColor = mix(
-        baseColor.rgb * (1.0 - DIELECTRIC_SPECULAR),
-        BLACK,
-        metalness
-    );
 
+    // From GLTF spec
+    vec3 diffuseColor = baseColor.rgb * (1.0 - DIELECTRIC_SPECULAR) * (1.0 - metalness);
+    vec3 F0 = mix(vec3_splat(DIELECTRIC_SPECULAR), baseColor.xyz, metalness);
+
+    // Load env textures
     vec2 f_ab = texture2D(s_brdfLUT, vec2(NoV, roughness)).xy;
-    // Select appropriate prefiltered environment map based on roughness
     float lodLevel = roughness * numEnvLevels;
     vec3 radiance = textureCubeLod(s_prefilteredEnv, lightDir, lodLevel).xyz;
     vec3 irradiance = textureCubeLod(s_irradiance, normal, 0).xyz;
 
-    vec3 color = (F0 * f_ab.x + f_ab.y) * radiance + (diffuseColor) * irradiance / PI;
-
-    color = occlusion * color * baseColor.w;
-    gl_FragColor = vec4(color, baseColor.w);
+    vec3 FssEss = F0 * f_ab.x + f_ab.y;
+    gl_FragColor = FssEss * radiance + diffuseColor * irradiance;
 }
+
 ```
 
 You might notice that both the value for `F0` and for `diffuseColor` are derived using the constant `DIELECTRIC_SPECULAR`, which is set to `0.04`. This is from the [GLTF spec](https://github.com/KhronosGroup/glTF/tree/master/specification/2.0#metallic-roughness-material), which uses this value for all dielectrics rather than storing an additional value.
@@ -838,82 +838,34 @@ You can also see the brightening of the metal goggles and base's plaque, but oth
 
 #### GLSL Shader Code
 
-Here's the final shader code, using the BRDF LUT, prefitlered environment map, and irradiance map as uniform arguments:
+Here's the multiscattering code, which can be appended to the shader code we used for single scattering above. We are still only using the BRDF LUT, prefitlered environment map, and irradiance map as uniforms, there are no additional uniforms introduced by multiple scattering:
 
 ```glsl
-$input v_position, v_normal, v_tangent, v_bitangent, v_texcoord
-
-#include "../common/common.sh"
-#include "pbr_helpers.sh"
-
-#define DIELECTRIC_SPECULAR 0.04
-#define BLACK vec3(0.0, 0.0, 0.0)
-
-// Scene
-uniform vec4 u_envParams;
-#define numEnvLevels u_envParams.x
-
-uniform vec4 u_cameraPos;
-
-// Material
-SAMPLER2D(s_diffuseMap, 0);
-SAMPLER2D(s_normalMap, 1);
-SAMPLER2D(s_metallicRoughnessMap, 2);
-
-// IBL Stuff
-SAMPLER2D(s_brdfLUT, 3);
-SAMPLERCUBE(s_prefilteredEnv, 4);
-SAMPLERCUBE(s_irradiance, 5);
+// Same code as from earlier... no extra uniforms
 
 void main()
 {
-    mat3 tbn = mat3FromCols(
-        normalize(v_tangent),
-        normalize(v_bitangent),
-        normalize(v_normal)
-    );
-    vec3 normal = texture2D(s_normalMap, v_texcoord).xyz * 2.0 - 1.0;
-    normal = normalize(mul(tbn, normal));
+    // Same code from earlier ...
 
-    vec3 viewDir = normalize(u_cameraPos.xyz - v_position);
-
-    vec4 baseColor = texture2D(s_diffuseMap, v_texcoord);
-    vec3 OccRoughMetal = texture2D(s_metallicRoughnessMap, v_texcoord).xyz;
-
-    vec3 lightDir = reflect(-viewDir, normal);
-    vec3 H = normalize(lightDir + viewDir);
-    float NoV = clamp(dot(normal, viewDir), 1e-5, 1.0);
-
-    float roughness = OccRoughMetal.y;
-    float metalness = OccRoughMetal.z;
-    float occlusion = OccRoughMetal.x;
-    vec3 F0 = mix(vec3_splat(DIELECTRIC_SPECULAR), baseColor.xyz, metalness);
-
-    // IBL stuff starts here
-    vec2 f_ab = texture2D(s_brdfLUT, vec2(NoV, roughness)).xy;
-    float lodLevel = roughness * numEnvLevels;
-    vec3 radiance = textureCubeLod(s_prefilteredEnv, lightDir, lodLevel).xyz;
-    vec3 irradiance = textureCubeLod(s_irradiance, normal, 0).xyz;
-
+    // Roughness dependent fresnel, from Fdez-Aguera
     vec3 Fr = max(vec3_splat(1.0 - roughness), F0) - F0;
-    vec3 k_S = F0 + Fr * pow(1.0 - NoV, 5.0);
+    k_S = F0 + Fr * pow(1.0 - NoV, 5.0);
 
     vec3 FssEss = k_S * f_ab.x + f_ab.y;
 
-    float Ess = f_ab.x + f_ab.y;
-    float Ems = 1.0 - Ess;
+    // Multiple scattering, from Fdez-Aguera
+    float Ems = (1.0 - (f_ab.x + f_ab.y));
     vec3 F_avg = F0 + (1.0 - F0) / 21.0;
-    vec3 Fms = FssEss / (1.0 - Ems * F_avg);
+    vec3 FmsEms = Ems * FssEss * F_avg / (1.0 - F_avg * Ems);
+    vec3 k_D = diffuseColor * (1.0 - FssEss - FmsEms);
+    vec3 color = FssEss * radiance + (FmsEms + k_D) * irradiance;
 
-    vec3 k_D = baseColor.xyz * (1 - (FssEss + Fms * Ems));
-    vec3 color = FssEss * radiance + (Fms * Ems + k_D) * irradiance;
-
-    color = occlusion * color * baseColor.w;
     gl_FragColor = vec4(color, baseColor.w);
 }
+
 ```
 
-Notice how little code is actually for calculating our new terms -- most of it is just texture reads and setup that we'd need to do for direct lighting as well.
+Notice how little code is actually for calculating our new terms! And yet the results for metals are very noticable.
 
 ## Future Work
 
