@@ -4,22 +4,6 @@ date: "2019-08-19T15:00:00Z"
 description: A guide to adding image based lighting that uses a multi-scattering
 ---
 
-- [Introduction and Background](#introduction-and-background)
-- [Image Based Lighting Challenges](#image-based-lighting-challenges)
-- [Lambertian Diffuse Component](#lambertian-diffuse-component)
-- [Importance Sampling](#importance-sampling)
-- [Split Sum Approximation](#split-sum-approximation)
-  - [Pre-filtered Environment Map](#pre-filtered-environment-map)
-  - [Environment BRDF](#environment-brdf)
-- [Single Scattering Results](#single-scattering-results)
-- [Accounting for Multiple-Scattering](#accounting-for-multiple-scattering)
-  - [Metals](#metals)
-  - [Dielectrics](#dielectrics)
-    - [Roughness Dependent Fresnel](#roughness-dependent-fresnel)
-    - [GLSL Shader Code](#glsl-shader-code)
-- [Future Work](#future-work)
-- [Source Code](#source-code)
-
 ## Introduction and Background
 
 Recently I decided to implement image based lighting in BGFX, since I had never implemented image based lighting before and it's a great way to get assets authored for PBR looking really great. As I started reading I realized that there was a lot of work done on this in the past few years built upon bit by bit, and that it might be useful to others to have a reference for implementation from start to finish. I've document the steps involved in implementation, starting with some background, then [Karis's 2014 paper](https://cdn2.unrealengine.com/Resources/files/2013SiggraphPresentationsNotes-26915738.pdf) explaining Unreal's IBL implementation, and then new approaches from [Fdez-Agüera](http://www.jcgt.org/published/0008/01/03/paper.pdf) and others to address the error present in existing models.

@@ -52,7 +52,7 @@ class BlogPostTemplate extends React.Component {
           </li>
         </ul>
 
-        {/* <TalkyardCommentsIframe /> */}
+        <TalkyardCommentsIframe />
       </Layout>
     );
   }
