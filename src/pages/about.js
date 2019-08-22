@@ -6,7 +6,7 @@ const AboutMe = () => {
     <Layout>
       <h1>Hello there!</h1>
       <p>
-        I'm Bruno Opsenica. I've recently decided to try any make my hobby of learning about 3D programming and computer
+        I'm Bruno Opsenica. I've recently decided to try and make my hobby of learning about 3D programming and computer
         graphics into a career. In order to do that, I've created this blog as a way of chronicling the things I'm
         learning about. It's meant to be a mechanism to make my learning visible to others, get feedback and
         (eventually, hopefully) provide help to others if they decide to go down the same path.
