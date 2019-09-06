@@ -854,12 +854,11 @@ Notice how little code has been added for calculating the new terms! And yet the
 ## Future Work
 
 - The multiscattering BRDF I've implemented here is only presented for image based lighting. [McAuley](http://advances.realtimerendering.com/s2019/index.htm) goes into some detail on how it could be extended for area lights using [Heitz's](https://eheitzresearch.wordpress.com/415-2/) linearly transformed cosine approach.
-- My model doesn't fully support the GLTF material spec. I still need to add better support for Occlusion, Emissive, scaling factors and non-texture uniforms (`baseColor` for instance can be encoded as a single `vec4`). I'm trying to accomplish this piecemeal while implementing other algorithms.
+- My model doesn't fully support the GLTF material spec. ~~I still need to add better support for Occlusion, Emissive, scaling factors and non-texture uniforms (`baseColor` for instance can be encoded as a single `vec4`). I'm trying to accomplish this piecemeal while implementing other algorithms.~~
+  - Since writing this post, I've added support for all the material properties that the GLTF spec provides in the "roughness metallic" workflow. There is no skinning or animation support yet though.
 - For our prefiltered environment map, at lower roughness values we are likely to encounter substantial aliasing in the reflections as we can no longer use the cube map's mip map chain as we typically would. I've seen some implementations like Babylon.js actually just use the higher roughness (e.g. blurrier) parts of the map anyway, to reduce aliasing.
 - If you have any feedback, please let me know either using the comments below, my [email](mailto:bruno.opsenica@gmail.com) or my [twitter account](https://twitter.com/BruOps)
 
 ## Source Code
 
-While I've included most of the shader code used, the entire example is available [here](https://github.com/bruop/bae) as [`04-pbl-ibl`](https://github.com/BruOp/bae/tree/master/examples/04-pbr-ibl). Note however that it uses non-standard GLTF files, that have had their web-compatible textures swapped out with corresponding DDS files that contain mip maps, generated using the `texturec` tool provided as part of BGFX. BGFX does not provide an easy way to invoke the equivalent of `glGenerateMipmap`, so I'm creating a small python script to pre-process the GLTF files, coming soon.
-
-Also I'm going to be re-working some of the application code in the coming days to clean it up a bit and make it easier to follow.
+While I've included most of the shader code used, the entire example is available [here](https://github.com/bruop/bae) as [`04-pbl-ibl`](https://github.com/BruOp/bae/tree/master/examples/04-pbr-ibl). Note however that it uses non-standard GLTF files, that have had their web-compatible textures swapped out with corresponding DDS files that contain mip maps, generated using the `texturec` tool provided as part of BGFX. BGFX does not provide an easy way to invoke the equivalent of `glGenerateMipmap`, so I've created a python script to pre-process the GLTF files. It can be found in the `scripts` folder of the repo.
