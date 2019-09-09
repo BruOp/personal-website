@@ -67,9 +67,9 @@ V(\mathbf{v}, \mathbf{l}) &=
 },
 \\
 V(\mathbf{v}, \mathbf{l}) &= \frac{0.5}{
-    \langle \mathbf{n}\cdot\mathbf{l} \rangle \sqrt{(\mathbf{n}\cdot\mathbf{v})^2 (\alpha^2 - 1) + \alpha^2}
+    \langle \mathbf{n}\cdot\mathbf{l} \rangle \sqrt{(\mathbf{n}\cdot\mathbf{v})^2 (1 - \alpha^2) + \alpha^2}
 +
-    \langle \mathbf{n}\cdot\mathbf{v} \rangle \sqrt{(\mathbf{n}\cdot\mathbf{l})^2 (\alpha^2 - 1) + \alpha^2}
+    \langle \mathbf{n}\cdot\mathbf{v} \rangle \sqrt{(\mathbf{n}\cdot\mathbf{l})^2 (1 - \alpha^2) + \alpha^2}
 }
 \end{aligned}
 $$
