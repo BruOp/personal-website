@@ -13,6 +13,10 @@ const links = [
     to: "/about",
     text: "About",
   },
+  {
+    to: "/projects",
+    text: "Portfolio",
+  },
 ];
 
 let NavList = ({ className }) => {
