@@ -24,7 +24,7 @@ For our BRDF, we will take the popular approach of using a Lambertian diffuse lo
 
 $$
 \begin{aligned}
-f_{\text{brdf}}(\mathbf{v}, \mathbf{l}) &= (f_{\text{specular}}(\mathbf{v}, \mathbf{l}) + f_{\text{diffuse}},
+f_{\text{brdf}}(\mathbf{v}, \mathbf{l}) &= f_{\text{specular}}(\mathbf{v}, \mathbf{l}) + f_{\text{diffuse}},
 \\\\
 f_{\text{specular}}(\mathbf{v}, \mathbf{l}) &=
     \frac{
@@ -455,7 +455,7 @@ At this point, we've managed to factor out the NDF but our sum is still dependen
 
 $$
 \begin{aligned}
-= &\frac{1}{N} \sum_{k=1}^{N}
+= &\frac{4}{N} \sum_{k=1}^{N}
     \frac{
         V(\mathbf{v},\mathbf{l},\mathbf{h}) \langle \mathbf{v} \cdot \mathbf{h} \rangle \langle\mathbf{n} \cdot \mathbf{l}_k\rangle
     }{
