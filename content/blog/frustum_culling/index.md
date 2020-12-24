@@ -1,20 +1,13 @@
 ---
 title: Frustum Culling
 date: "2020-12-12T15:00:00Z"
-description: Implementing frustum culling of AABBs from scratch
+description: SIMD Frustum Culling
 ---
-- [Introduction](#introduction)
-- [Culling and Bounding Volumes](#culling-and-bounding-volumes)
-- [OBB Culling](#obb-culling)
-- [Further Optimization](#further-optimization)
-- [SIMD Implementation](#simd-implementation)
-- [Conclusion](#conclusion)
-
 ## Introduction
 
-It's been a while since I wrote anything for this blog, as the last year and a half has been a bit of a rollercoaster! At some point I decided to try and write my own DX12 rendering lib from scratch, and it was probably a huge waste of time from a "implementing graphics techniques" perspective, but it's definitely forced me to read and write a lot more C/C++ code. I've definitely learned how to _not_ try to abstract certain things. But that's not what this blog post is about! Instead, it's about implementing a simple version of frustum culling on the CPU.
+It's been a while since I wrote anything for this blog, as the last year and a half has been a bit of a rollercoaster. At some point I decided to try and write my own DX12 rendering lib from scratch, and it was probably a huge waste of time from a "implementing graphics techniques" perspective, but it's definitely forced me to read and write a lot more C/C++ code. But I digress, since that's not what this post is about. In the past few weeks I've started working on clustered shading, but realized that I had never implemented my own frustum culling code.
 
-Before we talk about that though, let's first consider what happens when you submit a draw call for a mesh that's not visible from the camera's point of view. First, we'll have to record the associated information into a command buffer -- pointers to the meshes we're rendering, any changes in pipeline state, texture pointers and material data, etc. Recording and submitting this data is relatively cheap using DX12, but not free. The command buffer is then copied and sent over to the GPU through your PCIe bus, at which point the GPU command processor can start consuming it.
+Before we talk about the solution though, let's identify what problem we're solving here. Consider what happens when you submit a draw call for a mesh that's not visible from the camera's point of view: first, we'll have to record the associated information into a command buffer -- pointers to the meshes we're rendering, any changes in pipeline state, texture pointers and material data, etc. Recording and submitting this data is relatively cheap using DX12, but not free. The command buffer is then copied and sent over to the GPU through your PCIe bus, at which point the GPU command processor can start consuming it.
 
 The first stage in the Pipeline is going to be Input Assembly, or IA, where we load indices from the mesh's index buffer (if applicable) as well as the vertex data associated with those indices, which are then passed to our Vertex Shaders. This second stage is primarily responsible for transforming our vertices into normalized device coordinate (NDC) space, usually determined using the model, view and projection transforms we've passed in from the CPU side of our application. With that work done, the next stage is Primitive Assembly which will group our vertices into the primitive type set by our pipeline state (e.g. points, lines or triangles) and perform viewport and backface culling as well as clipping of any primitives that intersect the boundaries of NDC space.
 
@@ -36,11 +29,11 @@ GPU execution             | 5.8
 
 Below is the output of the occupancy graph:
 
-![GPU occupancy graph](./unculled_occupancy.png "GPU occupancy while rendering our unculled scene. The green represents vertex shader work, while the blue represents pixel shader work. Note the large smooth region on the left seems to be a quirk of the PIX timings, as far as I can tell.")
+![GPU occupancy graph](./unculled_occupancy.png "GPU occupancy while rendering our unculled scene. The green represents vertex shader work, while the blue represents pixel shader work.")
 
 This graph displays a timeline of how our GPU was utilized during the frame, specifically indicating the number of waves/warps being run in parallel per SM. The green indicates that the warps are being used for vertex shading, while the light blue indicates that they're being used for pixel/fragment shading. We can see here that of the ~5.6 ms required to render all our meshes, we spent the majority of that time running the vertex shaders for geometry that has no corresponding vertex shading and was completely culled from our final image.
 
-Let's take a look at how we can spend less time doing useless work. The solution seems obvious: don't try to render objects out of view! That should mean fewer commands, which should mean less wasted time on both the CPU and GPU.
+A solution seems obvious: don't try to render objects out of view! That should mean fewer commands, which should mean less wasted time on both the CPU and GPU.
 
 ## Culling and Bounding Volumes
 
@@ -48,7 +41,7 @@ Frustum culling is the process of identifying which rendering primitives are act
 
 ![Diagram demonstrating different forms of culling](./RTR4.19.09.png "Diagram demonstrating different forms of culling. All dotted regions can be culled using either view frustum culling, backface culling or occlusion culling. Taken from Real Time Rendering vol. 4, Fig. 19.09")
 
-There are actually quite a few different ways to solve this problem and as always they come with various benefits and drawbacks. The first choice you'll have to make is how you want to represent the bounds of your meshes, as testing the raw geometry against your frustum won't be feasible, you'd just be re-implementing vertex shading on the CPU! Therefore we need a simplified geometry instead, the two most common choices being bounding spheres or oriented bounding boxes (OBBs). Usually Axis Aligned Bounding Boxes (AABBs) are used to calculate the OBBs. Below is an example of an AABB, bounding sphere and OBB for our boom box.
+There are actually quite a few different ways to solve this problem and as always they come with various benefits and drawbacks. The first choice you'll have to make is how you want to represent the bounds of your meshes, as testing the raw geometry against your frustum won't be feasible, you'd just be re-implementing vertex shading on the CPU. Therefore we need to use a simplified geometry instead, with the two most common choices being bounding spheres or oriented bounding boxes (OBBs). Usually axis aligned bounding boxes (AABBs) in model space are used to calculate the OBBs. Below is an example of an AABB, bounding sphere and OBB for our boom box.
 
 ![Bounding Volumes](./bounding_volume_types.png "Examples of different bounding volumes. Left: Axis Aligned Bounding Box; Middle: Bounding Sphere; Right: Oriented Bounding Box")
 
@@ -77,7 +70,7 @@ As a quick reminder, points can be transformed from model to clip space using a 
 
 In my implementation, the output of the culling is a list of ids for the objects I want to render. The input is the camera, and then for each object a model-to-world transform plus a model space AABB. The culling function looks like:
 
-```c++
+```cpp
 struct Camera {
   mat4 view;
   mat4 projection;
@@ -110,7 +103,7 @@ void cull_AABBs_against_frustum(
 
 The visibility test is simple: we use our AABB corners (`min` and `max`) to initialize eight vertices. Then transform each vertex to clip space, then perform our test as defined above:
 
-```c++
+```cpp
 bool test_AABB_against_frustum(mat4& MVP, const AABB& aabb)
 {
     // Use our min max to define eight corners
@@ -168,7 +161,7 @@ Meanwhile, introducing multi-threading is not trivial and can easily make the en
 
 Finally, let me try to introduce data level parallelism. The idea here is that even on a single core, CPUs have large registers that we can treat as containing multiple data points, and perform the same instruction across all that data simultaneously. This idea of executing a single instruction across multiple data (or SIMD) can lead to a multiplicative speed increase. As an example, consider the following (somewhat contrived) scalarized code that takes the dot product of elements in two lists of vectors:
 
-```c++
+```cpp
 struct vec4 {
     float x;
     float y;
@@ -187,7 +180,7 @@ for (size_t i = 0; i < N; ++i) {
 
     // This is probably actually an inlined function call or something
     for (size_t j = 0; j < 4; ++j) {
-        res += a[j] * b[j];
+        res += lhs[j] * rhs[j];
     }
     c[i] = res;
 }
@@ -210,7 +203,7 @@ w w w w w w ...
 
 Here's some C++ code (that I didn't attempt to compile) that shows this alternate structure:
 
-```c++
+```cpp
 struct VectorList {
     float* x;
     float* y;
@@ -224,7 +217,7 @@ struct VectorList {
 
 Next, instead of loading our data one vector at a time, we'll load the data into our SIMD registers. To do so, we'll have to use "intrinsics" provided by your CPU manufacturer, which in my case is Intel. I have no idea what the situation is on AMD, but I know that ARM64 and other platforms probably provide their own set of intrinsics. For intel, an exhaustive (if not particularly beginner friendly) list can be found on their [intrinsics guide](https://software.intel.com/sites/landingpage/IntrinsicsGuide/). So we'll be using these intrinsics to load our data into 128-bit wide registers, and multiply and add across the lanes to calculate 4 dot products all at once. I have found it helpful to visualize these operations vertically as a result the nature of how SIMD operates across the "lanes" of SIMD registers, so I've annotated the code with crappy little diagrams of that:
 
-```c++
+```cpp
 VectorList a{N};
 VectorList b{N};
 float c[N]{};
@@ -274,7 +267,7 @@ for (size_t i = 0; i < N; i += stride) {
 }
 ```
 
-A few things that stuck out to me. First of all, we had to change the way our data was laid out in memory in order to take advantage of our SIMD lanes, so re-writing an algorithm might mean you need to make more fundamental changes than just swapping out your inner for loops. Additionally, those intrinsic functions are a bit scary from scary in terms of how they are platform specific. This can be address by using a SIMD library or something like [DirectXMath](https://github.com/Microsoft/DirectXMath), which takes care of using the relevant intrinsics for most CPU vendors. Finally, you might feel like writing such code comes with a significant cognative and productivity tax. There are tools like [ISPC](https://ispc.github.io/) that make writing vectorized code a bit less "artisinal", but I haven't had a chance to really play around with them. I should also mention that compilers are sometimes able to translate scalarized code into vectorized code, but since I was looking to write SIMD code as a learning exercise I didn't look into it very much.
+A few things that stuck out to me. First of all, we had to change the way our data was laid out in memory in order to take advantage of our SIMD lanes, so re-writing an algorithm might mean you need to make more fundamental changes than just swapping out your inner for loops. Additionally, those intrinsic functions are a bit scary from scary in terms of how they are platform specific. This can be address by using a SIMD library or something like [DirectXMath](https://github.com/Microsoft/DirectXMath), which takes care of using the relevant intrinsics for most CPU vendors. Finally, you might feel like writing such code comes with a significant cognative and productivity tax. There are also tools like [ISPC](https://ispc.github.io/) that make writing vectorized code a bit less "artisinal", but I haven't had a chance to really play around with them. I should also mention that compilers are sometimes able to translate scalarized code into vectorized code, but since I was looking to write SIMD code as a learning exercise I didn't look into it very much.
 
 Let's look at a less contrived example: frustum culling! That is, after all, the whole point of this post.
 
@@ -324,7 +317,7 @@ $$
 
 Hopefully that helps you visualize how we can use SIMD lanes for this problem. We'll just have to fill several registers such that they contain only a single element of the ith row of $A$, then perform the multiplications & adds that we've already demonstrated. Let's look at the code:
 
-```c++
+```cpp
 struct mat4 {
     union {
         vec4 rows[4];
@@ -378,7 +371,7 @@ $$
 
 So for each component we'll need to perform 4 multiply and 3 adds, plus splatting of the various components of our transform matrix. It ends up being pretty compact:
 
-```c++
+```cpp
 void transform_points_8(__m256 dest[4], const __m256 x, const __m256 y, const __m256 z, const mat4& transform)
 {
     for (size_t i = 0; i < 4; ++i) {
@@ -393,7 +386,7 @@ void transform_points_8(__m256 dest[4], const __m256 x, const __m256 y, const __
 
 Finally, we can bring this all together by filling registers with our unique combinations of the AABB's min and max components, transforming those vertices, performing logical comparisons and then finally reducing the result into a single value. We don't care how many vertices are in or out, just whether any single vertex is.
 
-```c++
+```cpp
 // Fills an entire __m128 with the value at c of the __m128 v
 #define SPLAT(v, c) _mm_permute_ps(v, _MM_SHUFFLE(c, c, c, c))
 
