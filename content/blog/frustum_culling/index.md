@@ -5,21 +5,21 @@ description: SIMD Frustum Culling
 ---
 ## Introduction
 
-It's been a while since I wrote anything for this blog, as the last year and a half has been a bit of a rollercoaster. At some point I decided to try and write my own DX12 rendering lib from scratch, and it was probably a huge waste of time from a "implementing graphics techniques" perspective, but it's definitely forced me to read and write a lot more C/C++ code. But I digress, since that's not what this post is about. In the past few weeks I've started working on clustered shading, but realized that I had never implemented my own frustum culling code.
+It's been a while! As it has been for many, 2020 has been a bit of a rollercoaster for me. Also at some point I decided to try and write my own DX12 rendering lib from scratch, and it was maybe ill advised from a "productively implement graphics techniques" perspective, but it's definitely forced me to read and write a lot more C/C++ code. But I digress, since that's not what this post is about and instead we'll be talking about how to reduce wasted work rendering objects out of view.
 
-Before we talk about the solution though, let's identify what problem we're solving here. Consider what happens when you submit a draw call for a mesh that's not visible from the camera's point of view: first, we'll have to record the associated information into a command buffer -- pointers to the meshes we're rendering, any changes in pipeline state, texture pointers and material data, etc. Recording and submitting this data is relatively cheap using DX12, but not free. The command buffer is then copied and sent over to the GPU through your PCIe bus, at which point the GPU command processor can start consuming it.
+But before we get started, let's review what happens when you submit a draw call for a mesh that's not visible from the camera's point of view: first, we'll have to record the associated information into a command buffer such as pointers to the meshes we're rendering, any changes in pipeline state, texture pointers and material data, etc. Recording and submitting this data is relatively cheap using DX12, but not free. The command buffer is then copied and sent over to the GPU through your PCIe bus, at which point the GPU command processor can start consuming it.
 
-The first stage in the Pipeline is going to be Input Assembly, or IA, where we load indices from the mesh's index buffer (if applicable) as well as the vertex data associated with those indices, which are then passed to our Vertex Shaders. This second stage is primarily responsible for transforming our vertices into normalized device coordinate (NDC) space, usually determined using the model, view and projection transforms we've passed in from the CPU side of our application. With that work done, the next stage is Primitive Assembly which will group our vertices into the primitive type set by our pipeline state (e.g. points, lines or triangles) and perform viewport and backface culling as well as clipping of any primitives that intersect the boundaries of NDC space.
+The first stage in the pipeline is going to be input assembly (IA) where we load indices from the mesh's index buffer (if applicable) as well as the associated vertex data, which are then passed to our vertex shaders. This second stage is chiefly responsible for transforming our vertices into clip space, calculated using the model, view and projection transforms that we've passed in from the CPU side of our application. With that work done, the next stage, called primitive assembly (PA), groups our vertices into the primitive type set by our pipeline state (e.g. points, lines or triangles) and performs viewport and backface culling, as well as clipping of any primitives that intersect the boundaries of NDC space.
 
-For a visible mesh, there are further stages but this is the end of the line for our non-visible meshes since they will be completely culled by the viewport culling, resulting in an early exit. If you're interested in a more exhaustive overview of the pipeline, I recommend this [series of blog posts by Fabian Giesen](https://fgiesen.wordpress.com/2011/07/09/a-trip-through-the-graphics-pipeline-2011-index/). The point is, that all this work I just described is completely wasted! None of that work results in changes to the final image that appears on screen.
+For a visible mesh, there are additional stages but this is the end of the line for our non-visible meshes since they will be entirely culled by the viewport culling, resulting in an early exit. If you're interested in a more exhaustive overview of the pipeline, I recommend this [series of blog posts by Fabian Giesen](https://fgiesen.wordpress.com/2011/07/09/a-trip-through-the-graphics-pipeline-2011-index/). The point is that none of this work I just described will result in pixel writes and it is just a waste of time.
 
-Additionally, we should also consider that we often render the same scene from multiple points of view, for example when rendering shadow maps we will need to submit all these commands again!
+Additionally, we should also consider that we often render the same scene from multiple points of view. For example, when rendering shadow maps we're going to pay this tax for each map we're rendering to.
 
-So obviously we're performing a ton of extra work that is totally useless. To demonstrate this, I setup a scene with 10,000 [Boom Boxes](https://github.com/KhronosGroup/glTF-Sample-Models/tree/master/2.0/BoomBox) arranged in a 3D grid around the origin. The data associated with their draw calls is stored in linear arrays that we loop through during our render pass, so it's basically as simple as I could make it. The camera sits in the middle of this 3D grid. Here's an overhead view with only a small horizontal slice of those boom boxes:
+Obviously we're performing a ton of extra work that is totally useless. To demonstrate this, I set up a scene with 10,000 [Boom Boxes](https://github.com/KhronosGroup/glTF-Sample-Models/tree/master/2.0/BoomBox) arranged in a 3D grid around the origin. The data associated with their draw calls is stored in linear arrays that we loop through during our render pass, so it's as simple as I could make it. The camera sits in the middle of the 3D grid, seeing only a subset of the boomboxes. Here's an overhead view of the scene (with only a subset of boomboxes rendered, to make it cleaer):
 
-![An overhead view of our scene with debug meshes enabled](./overhead.png "The boom box meshes are in white, their oriented bounding boxes are in red. The view frustum is highlighted in blue.")
+![An overhead view of our scene with debug meshes enabled](./overhead.png "The boombox meshes are in white, their oriented bounding boxes are in red. The view frustum is highlighted in blue.")
 
-All the meshes being rendered behind the blue line that represents our view frustum represent wasted work! Naively rendering all 10,000 of those meshes on my PC resulted in the following timings:
+All the meshes being rendered behind the blue line that represents our view frustum represent wasted work! Naively rendering all 10,000 of these meshes on my PC resulted in the following timings:
 
 Task               | Timing (ms)
 -------------------|-------------
@@ -27,36 +27,36 @@ CPU Command Buffer Creation + Submission  | 2.4
 GPU execution             | 5.8
 **Total**                 | **8.2**
 
-Below is the output of the occupancy graph:
+We can get a sense of how much time is being wasted by examining the GPU occupancy graph which displays a timeline of how our GPU was utilized during the frame, specifically indicating the number of waves/warps being run in parallel per SM. The green indicates that the warps are being used for vertex shading, while the light blue indicates that they're being used for pixel/fragment shading.
 
 ![GPU occupancy graph](./unculled_occupancy.png "GPU occupancy while rendering our unculled scene. The green represents vertex shader work, while the blue represents pixel shader work.")
 
-This graph displays a timeline of how our GPU was utilized during the frame, specifically indicating the number of waves/warps being run in parallel per SM. The green indicates that the warps are being used for vertex shading, while the light blue indicates that they're being used for pixel/fragment shading. We can see here that of the ~5.6 ms required to render all our meshes, we spent the majority of that time running the vertex shaders for geometry that has no corresponding vertex shading and was completely culled from our final image.
+The graph shows that ~5.6 ms are required to render all our meshes, but we spent the majority of that time running the vertex shaders for geometry that has no corresponding pixel shading (to be clear, this is indicated by the large regions of vertex shader work without any corresponding pixel shader work, in blue). This means we should expect large gains on the order of 3-4 ms if we are able to selectively render only objects in view.
 
 A solution seems obvious: don't try to render objects out of view! That should mean fewer commands, which should mean less wasted time on both the CPU and GPU.
 
 ## Culling and Bounding Volumes
 
-Frustum culling is the process of identifying which rendering primitives are actually relevant to your current view by performing intersection checks against your view frustum. The diagram below shows an example of this, with objects lying outside the view frustum being outlined with a dotted stroke (and labelled with "view frustum").
+Frustum culling is a solution to this problem wherein we identify which primitives are actually relevant to the current view by performing intersection checks against the view frustum. The diagram below shows an example of this, with objects lying outside the view frustum being outlined with a dotted stroke (and labelled with "view frustum").
 
 ![Diagram demonstrating different forms of culling](./RTR4.19.09.png "Diagram demonstrating different forms of culling. All dotted regions can be culled using either view frustum culling, backface culling or occlusion culling. Taken from Real Time Rendering vol. 4, Fig. 19.09")
 
-There are actually quite a few different ways to solve this problem and as always they come with various benefits and drawbacks. The first choice you'll have to make is how you want to represent the bounds of your meshes, as testing the raw geometry against your frustum won't be feasible, you'd just be re-implementing vertex shading on the CPU. Therefore we need to use a simplified geometry instead, with the two most common choices being bounding spheres or oriented bounding boxes (OBBs). Usually axis aligned bounding boxes (AABBs) in model space are used to calculate the OBBs. Below is an example of an AABB, bounding sphere and OBB for our boom box.
+There are actually quite a few different ways to solve this problem and as always they come with various benefits and drawbacks. The first choice you'll need to make is how you want to represent the bounds of your meshes, as testing the raw geometry against your frustum isn't feasible, so you'd just be re-implementing vertex shading on the CPU. Therefore we need to use a simplified geometry instead, with the two most common choices being bounding spheres or oriented bounding boxes (OBBs). Usually axis aligned bounding boxes (AABBs) in model space are used to calculate the OBBs. Below is an example of an AABB, bounding sphere and OBB for our boombox.
 
 ![Bounding Volumes](./bounding_volume_types.png "Examples of different bounding volumes. Left: Axis Aligned Bounding Box; Middle: Bounding Sphere; Right: Oriented Bounding Box")
 
-The simplicity of a sphere provides a few beneficial properties, namely intersection tests against other primitives are simple and cheap. Spheres also have an extremely compact data representation, requiring only a position and radius. On the other hand, the most notable drawback to using bounding spheres for culling is that the quality of spheres as bounding volumes drops quickly as the objects they enclose become "longer". If an object's bounds extends much further along one axis than it does in others, then the volume will contain mostly empty space.
+The simplicity of a sphere means that intersection tests against other primitives are simple and cheap. Spheres also have an extremely compact data representation, requiring only a position and radius. On the other hand, the quality of spheres as bounding volumes drops quickly as the objects they enclose become "longer". If an object's bound !TODO bound was plural I made it singular! extends much further along one axis than it does in others, then the volume will contain mostly empty space, meaning that it may pass our test despite all of the actual geometry lying outside the frustum.
 
-Boxes are an alternative that are much better suited to objects that do not have roughly equal maximal extents, since they store the distance from the center along each axis. An Axis aligned bounding box (AABB) is the simplest version, where the edges of the box are aligned with our coordinate axes. Oriented bounding boxes are a bit more complicated in that they can have arbitrary orientation. AABBs are commonly used to represent the bounding volume in model space, while OBBs are used to represent the bounds after the object is transformed to World or View space. OBBs have almost the opposite trade-offs to spheres. For instance, their representation requires storing either all 8 vertices or the three vectors that run alongside the edges of the box. Intersection tests are more expensive. However, as mentioned, they can be a much "tighter" fit for arbitrary geometry.
+An alternative is to use boxes, which are much better suited to objects that do not have roughly equal maximal extents, since they store the distance from the center along each axis. An axis aligned bounding box (AABB) is the simplest version, where the edges of the box are aligned with our coordinate axes. Oriented bounding boxes are a bit more complicated in that they can have arbitrary orientation. AABBs are commonly used to represent the bounding volume in model space, while OBBs are used to represent the bounds after the object is transformed to World or View space. OBBs have almost the opposite trade-offs to spheres. For instance, their representation requires storing either all eight vertices or the three vectors that run alongside the edges of the box. Intersection tests are more expensive. However, as mentioned, they can be a much "tighter" fit for arbitrary geometry.
 
-Which volume you use in the end depends on how accurate vs fast you need your frustum culling to be. Some games will break culling down into broad and fine phases, so that the first broad phase can use spheres and the fine phase uses other geometry (or other culling techniques altogether). I ended up choosing OBBs because as demonstrated below, we can actually choose a very simple intersection test for the specific task of view frustum culling.
+Which volume you use in the end depends on how accurate vs how fast you need your frustum culling to be. Some games will break culling down into broad and fine phases, so that the first broad phase can use spheres and the fine phase uses other geometry (or other culling techniques altogether). I ended up choosing OBBs because as demonstrated below, we can actually choose a very simple intersection test for the specific task of view frustum culling.
 
 <!--
 I should also bring up that sometimes people compute a bounding volume hierarchy (BVH) for their scene to allow for faster culling -- if you know the bounding volume of half of your scene is out of frame, then you do not need to test the bounding volumes within. I didn't really look into this because I found my exhaustive search to be fast enough, and introducing hierarchical data structures can also cause things to be slower! Frostbite provides a good example of this in their presentation on culling. -->
 
 ## OBB Culling
 
-While OBB intersection tests against arbitrary planes are more complicated than when using spheres, there is one exception. For points in __clip space__, whether they are in the view frustum can be determined using a trivial test:
+We can exploit the fact that in clip space, all points lying inside the view frustum will satisfy the following inequalities:
 
 $$
 \begin{aligned}
@@ -66,7 +66,7 @@ $$
 \end{aligned}
 $$
 
-As a quick reminder, points can be transformed from model to clip space using a Model-View-Projection (MVP) matrix. This means we'll need to transform all of the vertices of our AABBs into clip space.
+As a quick reminder, points can be transformed from model to clip space using a Model-View-Projection (MVP) matrix. This means that we'll need to transform all of the vertices of our AABBs into clip space.
 
 In my implementation, the output of the culling is a list of ids for the objects I want to render. The input is the camera, and then for each object a model-to-world transform plus a model space AABB. The culling function looks like:
 
@@ -101,7 +101,7 @@ void cull_AABBs_against_frustum(
 }
 ```
 
-The visibility test is simple: we use our AABB corners (`min` and `max`) to initialize eight vertices. Then transform each vertex to clip space, then perform our test as defined above:
+The visibility test is simple: we use our AABB corners (`min` and `max`) to initialize eight vertices, then transform each one to clip space and then perform our test as defined above:
 
 ```cpp
 bool test_AABB_against_frustum(mat4& MVP, const AABB& aabb)
@@ -143,7 +143,7 @@ CPU Command Buffer Creation + Submission  | 1.5
 GPU execution             | 1.5
 **Total**                 | **4.2**
 
-We can see that while we've added an extra step, but we've save some time while recording and submitting our command buffer. Our CPU frame time has gone up a little as a result. However, the GPU execution has decreased by about 4.3 ms! That's an almost 75% decrease in frametime. Additionally, if we look at GPU timeline and occupancy, we see huge gains, with the render time reduced to 2.455 ms. Below is the occupancy graph, notice how much less unused vertex shader work there is.
+We can see that although we've added an extra step, we've saved some time while recording and submitting our command buffer. Our CPU frame time has gone up a little as a result. However, the GPU execution has decreased by about 4.3 ms! That's an almost 75% decrease in frametime. Additionally, if we look at GPU timeline and occupancy, we see huge gains, with the render time reduced to 2.455 ms. Below is the occupancy graph, notice how much less unused vertex shader work there is.
 
 ![GPU Occupancy using culling](./culled_occupancy.png)
 
@@ -151,15 +151,15 @@ We can see that while we've added an extra step, but we've save some time while 
 
 We've already improved our timing by about 33%, but we're now spending a significant percentage of our frame time culling these objects. At this point, we could attempt several different optimizations (all of which could be potentially combined):
 
-- Introducing acceleration structures that let us entire groupings of objects at once (as mentioned previously, bounding volume hierarchies are commonly used). In theory, culling time no longer increases linearly as a function of number of AABBs.
+- Introducing acceleration structures that let us cull entire groupings of objects at once (as mentioned previously, bounding volume hierarchies are commonly used). In theory, culling time no longer increases linearly as a function of the number of AABBs.
 - Spreading our culling across many different threads/cores, having each core process a subset of objects at the same time.
 - "Vectorize" our code, taking advantage of data level parallelism and SIMD.
 
-Each option comes with it's own set of tradeoffs, which is basically always the case. Building acceleration structures is not free and will add it's own line item to our per-frame timing summary. To reduce the cost, the scene is often split into static and non-static hierarchies, with the static BVH only being built once outside the frame loop, but the non-static BVH will still require updating per frame. Additionally, care must be taken when building tree data structures that we don't end up making the culling process slower due to CPU cache misses when traversing down the tree. If your scene is mostly static, then it might make sense to build a BVH for static objects, flatten it to minimize cache misses, and then simply linearly loop through your dynamic objects as we've done here. [Frostbite](https://www.gdcvault.com/play/1014491/Culling-the-Battlefield-Data-Oriented) actually presented a case where removing their BVH and replacing it with a naive linear array resulted in a 3x improvement in speed.
+Each option comes with it's own set of tradeoffs, which is almost always the case. Building acceleration structures is not free and will add it's own line item to our per-frame timing summary. To reduce the cost, the scene is often split into static and non-static hierarchies, with the static BVH only being built once outside the frame loop, but the non-static BVH will still require updating per frame. Additionally, care must be taken when building tree data structures so we don't end up making the culling process slower due to CPU cache misses when traversing down the tree. If your scene is mostly static, then it might make sense to build a BVH for static objects, flatten it to minimize cache misses, and then simply linearly loop through your dynamic objects as we've done here. [Frostbite](https://www.gdcvault.com/play/1014491/Culling-the-Battlefield-Data-Oriented) actually presented a case where removing their BVH and replacing it with a naive linear array resulted in a 3x improvement in speed.
 
-Meanwhile, introducing multi-threading is not trivial and can easily make the entire thing slower. I actually played around with using [FiberTaskingLib](https://github.com/RichieSams/FiberTaskingLib) to launch tasks that culled 1024 objects each and then combined their results into a single visibility list that my renderer could consume as before, and it was almost 10 times slower than the naive approach I showed earlier! I still have to investigate why exactly this was the case, but my bet is that it's mostly due to the combine step. It's possible that producing a single list will always eat into any gains made from splitting up the culling, but like I said, further investigation is needed.
+Meanwhile, introducing multi-threading is not trivial and can easily make the entire process slower. I actually played around with using [FiberTaskingLib](https://github.com/RichieSams/FiberTaskingLib) to launch tasks that culled 1024 objects each and then combined their results into a single visibility list that my renderer could consume as before, and it was almost 10 times slower than the naive approach I showed earlier! I still have to investigate why exactly this was the case, but my bet is that it's mostly due to the combine step. It's possible that producing a single list will always eat into any gains made from splitting up the culling, but like I said, further investigation is needed.
 
-Finally, let me try to introduce data level parallelism. The idea here is that even on a single core, CPUs have large registers that we can treat as containing multiple data points, and perform the same instruction across all that data simultaneously. This idea of executing a single instruction across multiple data (or SIMD) can lead to a multiplicative speed increase. As an example, consider the following (somewhat contrived) scalarized code that takes the dot product of elements in two lists of vectors:
+Finally, let me introduce data level parallelism. The idea here is that even on a single core, CPUs have large registers that we can treat as containing multiple data points upon which we can perform the same instruction across all that data simultaneously. This idea of executing a single instruction across multiple data (or SIMD) can lead to a multiplicative speed increase. As an example, consider the following (somewhat contrived) scalarized code that takes the dot product of elements in two lists of vectors:
 
 ```cpp
 struct vec4 {
@@ -215,7 +215,7 @@ struct VectorList {
 
 ```
 
-Next, instead of loading our data one vector at a time, we'll load the data into our SIMD registers. To do so, we'll have to use "intrinsics" provided by your CPU manufacturer, which in my case is Intel. I have no idea what the situation is on AMD, but I know that ARM64 and other platforms probably provide their own set of intrinsics. For intel, an exhaustive (if not particularly beginner friendly) list can be found on their [intrinsics guide](https://software.intel.com/sites/landingpage/IntrinsicsGuide/). So we'll be using these intrinsics to load our data into 128-bit wide registers, and multiply and add across the lanes to calculate 4 dot products all at once. I have found it helpful to visualize these operations vertically as a result the nature of how SIMD operates across the "lanes" of SIMD registers, so I've annotated the code with crappy little diagrams of that:
+Next, instead of loading our data one vector at a time, we'll load the data into our SIMD registers. To do so, we'll have to use "intrinsics" provided by your CPU manufacturer, which in my case is Intel. I have no idea what the situation is on AMD, but I know that ARM64 and other platforms probably provide their own set of intrinsics. For Intel, an exhaustive (if not particularly beginner friendly) list can be found on their [intrinsics guide](https://software.intel.com/sites/landingpage/IntrinsicsGuide/). So we'll be using these intrinsics to load our data into 128-bit wide registers, and multiply and add across the lanes to calculate 4 dot products all at once. I have found it helpful to visualize these operations vertically due to the nature of how SIMD operates across the "lanes" of SIMD registers, so I've annotated the code with crappy little diagrams to try and visualize the intrinsics:
 
 ```cpp
 VectorList a{N};
@@ -267,20 +267,20 @@ for (size_t i = 0; i < N; i += stride) {
 }
 ```
 
-A few things that stuck out to me. First of all, we had to change the way our data was laid out in memory in order to take advantage of our SIMD lanes, so re-writing an algorithm might mean you need to make more fundamental changes than just swapping out your inner for loops. Additionally, those intrinsic functions are a bit scary from scary in terms of how they are platform specific. This can be address by using a SIMD library or something like [DirectXMath](https://github.com/Microsoft/DirectXMath), which takes care of using the relevant intrinsics for most CPU vendors. Finally, you might feel like writing such code comes with a significant cognative and productivity tax. There are also tools like [ISPC](https://ispc.github.io/) that make writing vectorized code a bit less "artisinal", but I haven't had a chance to really play around with them. I should also mention that compilers are sometimes able to translate scalarized code into vectorized code, but since I was looking to write SIMD code as a learning exercise I didn't look into it very much.
+A few things stuck out to me. First of all, we had to change the way our data was laid out in memory in order to take advantage of our SIMD lanes, so re-writing an algorithm might mean you need to make more fundamental changes than just swapping out your inner for loops. Additionally, those intrinsic functions are a bit scary in terms of how they are platform specific. This can be addressed by using a SIMD library or something like [DirectXMath](https://github.com/Microsoft/DirectXMath), which takes care of using the relevant intrinsics for most CPU vendors. Finally, you might feel like writing such code comes with a significant cognative and productivity tax. There are also tools like [ISPC](https://ispc.github.io/) that make writing vectorized code a bit less "artisinal", but I haven't had a chance to really play around with them. I should also mention that compilers are sometimes able to translate scalarized code into vectorized code, but since I was aiming to write SIMD code as a learning exercise I didn't look into it very much.
 
 Let's look at a less contrived example: frustum culling! That is, after all, the whole point of this post.
 
 ## SIMD Implementation
 
-When I started looking into how we could re-write this into SIMD, I actually found [a series of blog posts on optimizing frustum culling by Arseny Kapoulkine](https://zeux.io/2009/01/31/view-frustum-culling-optimization-introduction/)! However the series is specifically about optimizing it on the Playstation 3 (I think) and as a result it uses the SPU intrinsics that were part of Sony's/IBM's platform. But I was able to effectively translate it to use intel's SSE/AVX intrinsics with only one or two problems.
+When I started looking into how we could re-write this into SIMD, I actually found [a series of blog posts on optimizing frustum culling by Arseny Kapoulkine](https://zeux.io/2009/01/31/view-frustum-culling-optimization-introduction/). However, the series is specifically about optimizing it on the Playstation 3 (I think) and as a result it uses the SPU intrinsics that were part of Sony's/IBM's platform. But I was able to effectively translate it to use intel's SSE/AVX intrinsics with only one or two problems.
 
 There were two different operations I figured was worth exploiting SIMD for:
 
 1. Multiplying the various transformation matrices, since that's done for each object and their 4x4 nature is a natural fit for SIMD lanes
 2. Transforming our model space AABB vertices to clip space
 
-First, let's tackle matrix multiplication for 4x4 matrices. The biggest thing I struggle with on this one was understand how we can calculate an entire row of our resulting matrix at once. Let's start by consider how we'd calculate the $i$th row of our matrix for $C = AB$:
+First, let's tackle matrix multiplication for 4x4 matrices. The biggest thing I struggled with on this one was understanding how we can calculate an entire row of our resulting matrix at once. Let's start by considering how we'd calculate the $i$th row of our matrix for $C = AB$:
 
 $$
 \begin{aligned}
@@ -315,7 +315,7 @@ $$
 \end{array}
 $$
 
-Hopefully that helps you visualize how we can use SIMD lanes for this problem. We'll just have to fill several registers such that they contain only a single element of the ith row of $A$, then perform the multiplications & adds that we've already demonstrated. Let's look at the code:
+Hopefully that helps you visualize how we can use SIMD lanes for this problem. We'll have to fill several registers such that they contain only a single element of the ith row of $A$, then perform the multiplications & adds that we've already demonstrated. Let's look at the code:
 
 ```cpp
 struct mat4 {
@@ -345,7 +345,7 @@ void matrix_mul_sse(const mat4& A, const mat4& B, mat4& dest)
 
 Next up, we need to write code that will transform our AABB vertices into clip space. To accomplish this we could use either 128-bit or 256-bit wide registers. Since we have 8 vertices, it would probably make sense to use the 8 lanes available with 256-bit. I ended up writing a 128-bit version first, and then a 256 version, and neither showed any speed differences on my machine.
 
-The idea here is nearly identical to our matrix transform from earlier. The operation looks like:
+Performing the matrix-vector multiplication is nearly identical to our matrix multiplication from earlier. The operation looks like:
 
 $$
 A\textbf{v} =
@@ -384,7 +384,7 @@ void transform_points_8(__m256 dest[4], const __m256 x, const __m256 y, const __
 }
 ```
 
-Finally, we can bring this all together by filling registers with our unique combinations of the AABB's min and max components, transforming those vertices, performing logical comparisons and then finally reducing the result into a single value. We don't care how many vertices are in or out, just whether any single vertex is.
+Finally, we can bring this all together by filling registers with our unique combinations of the AABB's min and max components, transforming those vertices, performing logical comparisons and then finally reducing the result into a single value. We don't care how many vertices are in or out, just whether any single vertex is inside.
 
 ```cpp
 // Fills an entire __m128 with the value at c of the __m128 v
@@ -464,7 +464,7 @@ bool test_AABB_against_frustum_256(mat4& transform, const AABB& aabb)
 
 It's definitely not the nicest looking code, but it'll be worth it, I promise. Once you get used to the intrinsics, it's really not so bad. This thing I had the most trouble with was definitely just parsing the documentation -- there are a LOT of intrinsics, and discovering the one you need is not easy since the search is only helpful if you know or can guess the name of the one you need.
 
-The other bit I just had to think about a bit was the best way to perform the "horizontal" OR reduction at the end. In [zeux's examples](https://gist.github.com/zeux/1fb08fb04ae97c79852e#file-vfc5-cpp-L104), he uses an `orx` intrinsic that doesn't appear to exist on intel. Instead, I reduce by shuffling/permuting the vectors to ensure the first component ends up holding the final value we want.
+Another operation that puzzled me was how to best perform the "horizontal" OR reduction at the end. In [zeux's examples](https://gist.github.com/zeux/1fb08fb04ae97c79852e#file-vfc5-cpp-L104), he uses an `orx` intrinsic that doesn't appear to exist on intel. Instead, I reduced by shuffling/permuting the vectors to ensure the first component ends up holding the final value we want.
 
 Now let's take a look at the results:
 
@@ -482,12 +482,12 @@ This may seem like a lot of work for saving 0.8 ms, but keep in mind that we may
 
 ## Conclusion
 
-To recap, for our contrived example we've **brought down our frame time from 8.2 ms to 3.3 ms**, without having to make any significant changes to our data structures, bring in acceleration structures or introduce multi-threaded execution. There is probably still significant headroom for improvement I think -- the lower bound is likely going to be determined by the bandwidth limitations around writing to our visibility list. Currently, we're reaching about `32 bits * 1e4 / 3.0e-4s ~= 1e9 bits/s ~= 1 GB/s` in this worst case.
+To recap, for our contrived example we've **brought down our frame time from 8.2 ms to 3.3 ms** with frustum culling. Introducing SIMD in a small part of the code was also pretty impactful, cutting down the cost of culling by about 75%. There is probably still significant headroom for improvement -- the lower bound is likely going to be determined by the bandwidth limitations around writing to our visibility list. Currently, we're reaching about `32 bits * 1e4 / 3.0e-4s ~= 1e9 bits/s ~= 1 GB/s` in this worst case.
 
 Additionally, I just want to re-iterate that _I am not experienced with SIMD intrinsics_. If you know of a better way to perform any parts of the above, please let me know in the comments, by email or through twitter [@BruOps](https://twitter.com/BruOps).
 
-Also there is a subtle problem with my culling code. If the OBB is large compared to the view frustum, then this code will produce false negatives. We should probably also perform the reciprocal test and check whether any of the frustum corners fall within the OBB. This is really only a problem at the near plane, so we might be able to get away with just testing those four corners.
+There is also a subtle problem with my culling code. If the OBB is large compared to the view frustum, then this code will produce false negatives. We should probably also perform the reciprocal test and check whether any of the frustum corners fall within the OBB. This is really only a problem at the near plane, so we might be able to get away with just testing those four corners.
 
-Finally, I just want to highlight that while profiling with PIX I encountered pretty high variability in CPU execution times. I expected CPU timings to vary by 10-20% but I often had events exhibit single frame "spikes" who's execution time were orders of magnitude higher than the other recorded times rest within a capture of a few seconds. Other times, there would be smaller spike that were only 2-5 times larger. Taking a look at the timeline, I saw that in these cases the thread my code was running on would stall, but it seems pretty non-deterministic since it'd happen for a few frames, and then wouldn't. The camera isn't moving at this time, and as far as I know there are no allocations during the frame, so I'm not sure what's causing the variability between frames.
+Finally, I just want to highlight that while profiling with PIX I encountered pretty high variability in CPU execution times. I expected CPU timings to vary by 10-20% but I often had events exhibit single frame "spikes" where execution times were orders of magnitude higher than usual (within a capture of a few seconds). Other times, there would be smaller spikes that were only 2-5 times larger. Taking a look at the timeline, I saw that in these cases the thread my code was running on would stall, but it seems pretty non-deterministic since it'd happen for a few frames, and then wouldn't. The camera wasn't moving at all during the recordings, and as far as I know there were no allocations during the frame, so I'm not sure what was causing the variability between frames.
 
-Thanks for reading this far! Hope you have a happy holidays and that 2021 is kinder to us all.
+Thanks for reading til the end! Shout out to the folks on the [Graphics Programming discord](https://discord.com/invite/Eb7P3wH) who provided guidance and rubber ducking. I hope you and your loved ones have a happy holiday, and that 2021 is kinder to us all.
