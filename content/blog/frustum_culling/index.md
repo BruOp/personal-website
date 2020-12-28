@@ -3,6 +3,9 @@ title: Frustum Culling
 date: "2020-12-12T15:00:00Z"
 description: SIMD Frustum Culling
 ---
+
+**Update:** After posting [this on twitter](https://twitter.com/BruOps/status/1342217298774532097?s=20), I received a few helpful suggestions to implement a more robust testing using the separating axis theorem. I'll implement and write up a follow up post soon, but I wanted to post this disclaimer that perhaps I was a bit too optimistic on just how many false negatives this method would produce. I'll include a more detailed explanation in the follow up.
+
 ## Introduction
 
 It's been a while! As it has been for many, 2020 has been a bit of a rollercoaster for me. Also at some point I decided to try and write my own DX12 rendering lib from scratch, and it was maybe ill advised from a "productively implement graphics techniques" perspective, but it's definitely forced me to read and write a lot more C/C++ code. But I digress, since that's not what this post is about and instead we'll be talking about how to reduce wasted work rendering objects out of view.
@@ -123,7 +126,7 @@ bool test_AABB_against_frustum(mat4& MVP, const AABB& aabb)
 
     for (size_t corner_idx = 0; corner_idx < ARRAY_SIZE(corners); corner_idx++) {
         // Transform vertex
-        corners[corner_idx] = MVP * corners[corner_idx];
+        vec4 corner = MVP * corners[corner_idx];
         // Check vertex against clip space bounds
         inside = inside ||
             within(-corner.w, corner.x, corner.w) &&
