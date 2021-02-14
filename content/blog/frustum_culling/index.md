@@ -1,6 +1,6 @@
 ---
 title: Frustum Culling
-date: "2020-12-12T15:00:00Z"
+date: "2020-12-24T15:00:00Z"
 description: SIMD Frustum Culling
 ---
 
@@ -24,11 +24,11 @@ Obviously we're performing a ton of extra work that is totally useless. To demon
 
 All the meshes being rendered behind the blue line that represents our view frustum represent wasted work! Naively rendering all 10,000 of these meshes on my PC resulted in the following timings:
 
-Task               | Timing (ms)
--------------------|-------------
-CPU Command Buffer Creation + Submission  | 2.4
-GPU execution             | 5.8
-**Total**                 | **8.2**
+| Task                                     | Timing (ms) |
+| ---------------------------------------- | ----------- |
+| CPU Command Buffer Creation + Submission | 2.4         |
+| GPU execution                            | 5.8         |
+| **Total**                                | **8.2**     |
 
 We can get a sense of how much time is being wasted by examining the GPU occupancy graph which displays a timeline of how our GPU was utilized during the frame, specifically indicating the number of waves/warps being run in parallel per SM. The green indicates that the warps are being used for vertex shading, while the light blue indicates that they're being used for pixel/fragment shading.
 
@@ -139,12 +139,12 @@ bool test_AABB_against_frustum(mat4& MVP, const AABB& aabb)
 
 With this, we now have a working version of frustum culling! Re-running the same test from earlier, let's examine the differences in performance, with rough timings in the table below:
 
-Task               | Timing (ms)
--------------------|-------------
-Frustum Culling    | 1.2
-CPU Command Buffer Creation + Submission  | 1.5
-GPU execution             | 1.5
-**Total**                 | **4.2**
+| Task                                     | Timing (ms) |
+| ---------------------------------------- | ----------- |
+| Frustum Culling                          | 1.2         |
+| CPU Command Buffer Creation + Submission | 1.5         |
+| GPU execution                            | 1.5         |
+| **Total**                                | **4.2**     |
 
 We can see that although we've added an extra step, we've saved some time while recording and submitting our command buffer. Our CPU frame time has gone up a little as a result. However, the GPU execution has decreased by about 4.3 ms! That's an almost 75% decrease in frametime. Additionally, if we look at GPU timeline and occupancy, we see huge gains, with the render time reduced to 2.455 ms. Below is the occupancy graph, notice how much less unused vertex shader work there is.
 
@@ -471,12 +471,12 @@ Another operation that puzzled me was how to best perform the "horizontal" OR re
 
 Now let's take a look at the results:
 
-Task               | Timing (ms)
--------------------|-------------
-Frustum Culling    | 0.3
-CPU Command Buffer Creation + Submission  | 1.5
-GPU execution             | 1.5
-**Total**                 | **3.3**
+| Task                                     | Timing (ms) |
+| ---------------------------------------- | ----------- |
+| Frustum Culling                          | 0.3         |
+| CPU Command Buffer Creation + Submission | 1.5         |
+| GPU execution                            | 1.5         |
+| **Total**                                | **3.3**     |
 
 The time needed for culling has **gone down from ~1.1 ms to ~0.3 ms!** On my laptop, the gains are similar -- 3.0 ms down to 0.6ms. With SIMD, we are now spending less time rendering a frame on both the CPU and the GPU.
 
