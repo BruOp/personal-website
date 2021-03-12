@@ -102,6 +102,8 @@ The geometric average is susceptible to extreme values being over-represented in
 
 To construct the histogram, I used [Alex Tardif's](http://www.alextardif.com/HistogramLuminance.html) blog post on the exact same subject as a reference. I'll still explain the code here, and try to focus on the parts that confused me the most while trying to replicate Tardif's method. Here's the compute shader, written using BGFX's version of glsl:
 
+**Update:** I've fixed a bug with the two compute shaders below. They previously used `groupMemoryBarrier`s for synchronization, but that was inadequate as we really wanted both an execution and a group memory barrier. Due to the fact that BGFX's `shaderc` will actually translate that GLSL into `GroupMemoryBarrierWithGroupSync()` and the fact that I only ran the samples using the DX11 backend, I never ran into the issue myself. Thanks to users Cirdan and marttyfication on the [Graphics Programming Discord](https://discord.gg/uBqpJxfk) for encountering the bug and letting me know the solution, respectively.
+
 ```glsl
 // This defines all the preprocessor definitions that translate things
 // like gl_LocalInvocationIndex to HLSL's SV_GroupIndex
@@ -151,7 +153,7 @@ NUM_THREADS(THREADS_X, THREADS_Y, 1)
 void main() {
   // Initialize the bin for this thread to 0
   histogramShared[gl_LocalInvocationIndex] = 0;
-  groupMemoryBarrier();
+  barrier();
 
   uvec2 dim = imageSize(s_texColor).xy;
   // Ignore threads that map to areas beyond the bounds of our HDR image
@@ -165,7 +167,7 @@ void main() {
 
   // Wait for all threads in the work group to reach this point before adding our
   // local histogram to the global one
-  groupMemoryBarrier();
+  barrier();
 
   // Technically there's no chance that two threads write to the same bin here,
   // but different work groups might! So we still need the atomic add.
@@ -216,7 +218,7 @@ void main() {
   uint countForThisBin = histogram[localIndex];
   histogramShared[localIndex] = countForThisBin * localIndex;
 
-  groupMemoryBarrier();
+  barrier();
 
   // Reset the count stored in the buffer in anticipation of the next pass
   histogram[localIndex] = 0;
@@ -228,7 +230,7 @@ void main() {
       histogramShared[localIndex] += histogramShared[localIndex + cutoff];
     }
 
-    groupMemoryBarrier();
+    barrier();
   }
 
   // We only need to calculate this once, so only a single thread is needed.
